@@ -18,7 +18,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” 
 
 use std::io::{Read, Result, Write};
 
-use crate::cabac::{CabacReader, CabacWriter};
+use crate::traits::{CabacReader, CabacWriter};
 
 const BITS_IN_BYTE: i32 = 8;
 const BITS_IN_LONG: i32 = 64;
@@ -248,6 +248,33 @@ impl<W: Write> VP8Writer<W> {
 
         Ok(())
     }
+
+    fn send_to_output(&mut self, shift: i32) -> Result<()> {
+        let offset = shift - self.count;
+        if ((self.low_value << (offset - 1)) & 0x80000000) != 0 {
+            let mut x = self.buffer.len() - 1;
+
+            while self.buffer[x] == 0xFF {
+                self.buffer[x] = 0;
+
+                assert!(x > 0);
+                x -= 1;
+            }
+
+            self.buffer[x] += 1;
+        }
+        self.buffer.push((self.low_value >> (24 - offset)) as u8);
+        self.low_value <<= offset;
+        self.low_value &= 0xffffff;
+        self.low_value <<= self.count;
+        self.count -= 8;
+
+        if self.buffer.len() > 65536 - 128 {
+            self.flush_non_final_data()?;
+        }
+
+        Ok(())
+    }
 }
 
 impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
@@ -267,40 +294,18 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
 
         //lookup tables are best avoided in modern CPUs
         //let mut shift = VPX_NORM[self.range as usize] as i32;
-        let mut shift = self.range.leading_zeros() as i32 - 24;
+        let shift = self.range.leading_zeros() as i32 - 24;
 
         self.range <<= shift;
 
         self.count += shift;
 
         if self.count >= 0 {
-            let offset = shift - self.count;
-
-            if ((self.low_value << (offset - 1)) & 0x80000000) != 0 {
-                let mut x = self.buffer.len() - 1;
-
-                while self.buffer[x] == 0xFF {
-                    self.buffer[x] = 0;
-
-                    assert!(x > 0);
-                    x -= 1;
-                }
-
-                self.buffer[x] += 1;
-            }
-
-            self.buffer.push((self.low_value >> (24 - offset)) as u8);
-            self.low_value <<= offset;
-            shift = self.count;
-            self.low_value &= 0xffffff;
-            self.count -= 8;
+            self.send_to_output(shift)?;
         }
-
-        self.low_value <<= shift;
-
-        // check if we're out of buffer space, if yes - send the buffer to output,
-        if self.buffer.len() > 65536 - 128 {
-            self.flush_non_final_data()?;
+        else
+        {
+            self.low_value <<= shift;
         }
 
         Ok(())
@@ -336,40 +341,18 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
 
         //lookup tables are best avoided in modern CPUs
         //let mut shift = VPX_NORM[self.range as usize] as i32;
-        let mut shift = self.range.leading_zeros() as i32 - 24;
+        let shift = self.range.leading_zeros() as i32 - 24;
 
         self.range <<= shift;
 
         self.count += shift;
 
         if self.count >= 0 {
-            let offset = shift - self.count;
-
-            if ((self.low_value << (offset - 1)) & 0x80000000) != 0 {
-                let mut x = self.buffer.len() - 1;
-
-                while self.buffer[x] == 0xFF {
-                    self.buffer[x] = 0;
-
-                    assert!(x > 0);
-                    x -= 1;
-                }
-
-                self.buffer[x] += 1;
-            }
-
-            self.buffer.push((self.low_value >> (24 - offset)) as u8);
-            self.low_value <<= offset;
-            shift = self.count;
-            self.low_value &= 0xffffff;
-            self.count -= 8;
+            self.send_to_output(shift)?;
         }
-
-        self.low_value <<= shift;
-
-        // check if we're out of buffer space, if yes - send the buffer to output,
-        if self.buffer.len() > 65536 - 128 {
-            self.flush_non_final_data()?;
+        else
+        {
+            self.low_value <<= shift;
         }
 
         Ok(())
