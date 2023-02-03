@@ -302,9 +302,7 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
 
         if self.count >= 0 {
             self.send_to_output(shift)?;
-        }
-        else
-        {
+        } else {
             self.low_value <<= shift;
         }
 
@@ -349,9 +347,7 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
 
         if self.count >= 0 {
             self.send_to_output(shift)?;
-        }
-        else
-        {
+        } else {
             self.low_value <<= shift;
         }
 
