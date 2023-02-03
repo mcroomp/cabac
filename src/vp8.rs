@@ -107,7 +107,7 @@ pub struct VP8Reader<R> {
     value: u64,
     range: u32,
     count: i32,
-    upstream_reader: R,
+    reader: R,
 }
 
 impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
@@ -118,29 +118,26 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
 
         let prob = branch.get_probability() as u32;
 
-        let mut tmp_range = self.range;
-        let mut tmp_value = self.value;
-
-        let split = ((tmp_range * prob) + (256 - prob)) >> BITS_IN_BYTE;
+        let split = ((self.range * prob) + (256 - prob)) >> BITS_IN_BYTE;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
-        let bit = tmp_value >= big_split;
+        let bit = self.value >= big_split;
 
         if bit {
             branch.record_and_update_true_obs();
-            tmp_range = tmp_range - split;
-            tmp_value -= big_split;
+            self.range = self.range - split;
+            self.value -= big_split;
         } else {
             branch.record_and_update_false_obs();
-            tmp_range = split;
+            self.range = split;
         }
 
         //lookup tables are best avoided in modern CPUs
-        //let shift = VPX_NORM[tmp_range as usize] as i32;
-        let shift = (tmp_range as u8).leading_zeros() as i32;
+        //let shift = VPX_NORM[self.range as usize] as i32;
+        let shift = (self.range as u8).leading_zeros() as i32;
 
-        self.value = tmp_value << shift;
+        self.value <<= shift;
         self.count -= shift;
-        self.range = tmp_range << shift;
+        self.range <<= shift;
 
         return Ok(bit);
     }
@@ -152,27 +149,24 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
 
         let prob = 128;
 
-        let mut tmp_range = self.range;
-        let mut tmp_value = self.value;
-
-        let split = ((tmp_range * prob) + (256 - prob)) >> BITS_IN_BYTE;
+        let split = ((self.range * prob) + (256 - prob)) >> BITS_IN_BYTE;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
-        let bit = tmp_value >= big_split;
+        let bit = self.value >= big_split;
 
         if bit {
-            tmp_range = tmp_range - split;
-            tmp_value -= big_split;
+            self.range = self.range - split;
+            self.value -= big_split;
         } else {
-            tmp_range = split;
+            self.range = split;
         }
 
         //lookup tables are best avoided in modern CPUs
-        //let shift = VPX_NORM[tmp_range as usize] as i32;
-        let shift = (tmp_range as u8).leading_zeros() as i32;
+        //let shift = VPX_NORM[self.range as usize] as i32;
+        let shift = (self.range as u8).leading_zeros() as i32;
 
-        self.value = tmp_value << shift;
+        self.value <<= shift;
         self.count -= shift;
-        self.range = tmp_range << shift;
+        self.range <<= shift;
 
         return Ok(bit);
     }
@@ -181,7 +175,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
 impl<R: Read> VP8Reader<R> {
     pub fn new(reader: R) -> Result<Self> {
         let mut r = VP8Reader {
-            upstream_reader: reader,
+            reader,
             value: 0,
             count: -8,
             range: 255,
@@ -196,25 +190,20 @@ impl<R: Read> VP8Reader<R> {
     }
 
     fn vpx_reader_fill(&mut self) -> Result<()> {
-        let mut tmp_value = self.value;
-        let mut tmp_count = self.count;
-        let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE - (tmp_count + BITS_IN_BYTE);
+        let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE - (self.count + BITS_IN_BYTE);
 
         while shift >= 0 {
             // BufReader is already pretty efficient handling small reads, so optimization doesn't help that much
             let mut v = [0u8; 1];
-            let bytes_read = self.upstream_reader.read(&mut v[..])?;
+            let bytes_read = self.reader.read(&mut v[..])?;
             if bytes_read == 0 {
                 break;
             }
 
-            tmp_value |= (v[0] as u64) << shift;
+            self.value |= (v[0] as u64) << shift;
             shift -= BITS_IN_BYTE;
-            tmp_count += BITS_IN_BYTE;
+            self.count += BITS_IN_BYTE;
         }
-
-        self.value = tmp_value;
-        self.count = tmp_count;
 
         return Ok(());
     }
@@ -265,32 +254,29 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
     fn put(&mut self, value: bool, branch: &mut VP8Context) -> Result<()> {
         let probability = branch.get_probability() as u32;
 
-        let mut tmp_range = self.range;
-        let split = 1 + (((tmp_range - 1) * probability) >> 8);
+        let split = 1 + (((self.range - 1) * probability) >> 8);
 
-        let mut tmp_low_value = self.low_value;
         if value {
             branch.record_and_update_true_obs();
-            tmp_low_value += split;
-            tmp_range -= split;
+            self.low_value += split;
+            self.range -= split;
         } else {
             branch.record_and_update_false_obs();
-            tmp_range = split;
+            self.range = split;
         }
 
         //lookup tables are best avoided in modern CPUs
-        //let mut shift = VPX_NORM[tmp_range as usize] as i32;
-        let mut shift = tmp_range.leading_zeros() as i32 - 24;
+        //let mut shift = VPX_NORM[self.range as usize] as i32;
+        let mut shift = self.range.leading_zeros() as i32 - 24;
 
-        tmp_range <<= shift;
+        self.range <<= shift;
 
-        let mut tmp_count = self.count;
-        tmp_count += shift;
+        self.count += shift;
 
-        if tmp_count >= 0 {
-            let offset = shift - tmp_count;
+        if self.count >= 0 {
+            let offset = shift - self.count;
 
-            if ((tmp_low_value << (offset - 1)) & 0x80000000) != 0 {
+            if ((self.low_value << (offset - 1)) & 0x80000000) != 0 {
                 let mut x = self.buffer.len() - 1;
 
                 while self.buffer[x] == 0xFF {
@@ -303,18 +289,14 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
                 self.buffer[x] += 1;
             }
 
-            self.buffer.push((tmp_low_value >> (24 - offset)) as u8);
-            tmp_low_value <<= offset;
-            shift = tmp_count;
-            tmp_low_value &= 0xffffff;
-            tmp_count -= 8;
+            self.buffer.push((self.low_value >> (24 - offset)) as u8);
+            self.low_value <<= offset;
+            shift = self.count;
+            self.low_value &= 0xffffff;
+            self.count -= 8;
         }
 
-        tmp_low_value <<= shift;
-
-        self.count = tmp_count;
-        self.low_value = tmp_low_value;
-        self.range = tmp_range;
+        self.low_value <<= shift;
 
         // check if we're out of buffer space, if yes - send the buffer to output,
         if self.buffer.len() > 65536 - 128 {
@@ -343,30 +325,27 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
     fn put_bypass(&mut self, value: bool) -> Result<()> {
         let probability = 128;
 
-        let mut tmp_range = self.range;
-        let split = 1 + (((tmp_range - 1) * probability) >> 8);
+        let split = 1 + (((self.range - 1) * probability) >> 8);
 
-        let mut tmp_low_value = self.low_value;
         if value {
-            tmp_low_value += split;
-            tmp_range -= split;
+            self.low_value += split;
+            self.range -= split;
         } else {
-            tmp_range = split;
+            self.range = split;
         }
 
         //lookup tables are best avoided in modern CPUs
-        //let mut shift = VPX_NORM[tmp_range as usize] as i32;
-        let mut shift = tmp_range.leading_zeros() as i32 - 24;
+        //let mut shift = VPX_NORM[self.range as usize] as i32;
+        let mut shift = self.range.leading_zeros() as i32 - 24;
 
-        tmp_range <<= shift;
+        self.range <<= shift;
 
-        let mut tmp_count = self.count;
-        tmp_count += shift;
+        self.count += shift;
 
-        if tmp_count >= 0 {
-            let offset = shift - tmp_count;
+        if self.count >= 0 {
+            let offset = shift - self.count;
 
-            if ((tmp_low_value << (offset - 1)) & 0x80000000) != 0 {
+            if ((self.low_value << (offset - 1)) & 0x80000000) != 0 {
                 let mut x = self.buffer.len() - 1;
 
                 while self.buffer[x] == 0xFF {
@@ -379,18 +358,14 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
                 self.buffer[x] += 1;
             }
 
-            self.buffer.push((tmp_low_value >> (24 - offset)) as u8);
-            tmp_low_value <<= offset;
-            shift = tmp_count;
-            tmp_low_value &= 0xffffff;
-            tmp_count -= 8;
+            self.buffer.push((self.low_value >> (24 - offset)) as u8);
+            self.low_value <<= offset;
+            shift = self.count;
+            self.low_value &= 0xffffff;
+            self.count -= 8;
         }
 
-        tmp_low_value <<= shift;
-
-        self.count = tmp_count;
-        self.low_value = tmp_low_value;
-        self.range = tmp_range;
+        self.low_value <<= shift;
 
         // check if we're out of buffer space, if yes - send the buffer to output,
         if self.buffer.len() > 65536 - 128 {
