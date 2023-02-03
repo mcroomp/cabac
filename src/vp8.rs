@@ -24,6 +24,7 @@ const BITS_IN_BYTE: i32 = 8;
 const BITS_IN_LONG: i32 = 64;
 const BITS_IN_LONG_MINUS_LAST_BYTE: i32 = BITS_IN_LONG - BITS_IN_BYTE;
 
+/// context for VP8 encoder/decoder. Consists of two 8 bit counts (one for true, one for false).
 pub struct VP8Context {
     counts: u16,
 }
@@ -103,6 +104,7 @@ impl VP8Context {
     }
 }
 
+/// decoder from VP8/WebM
 pub struct VP8Reader<R> {
     value: u64,
     range: u32,
@@ -209,6 +211,7 @@ impl<R: Read> VP8Reader<R> {
     }
 }
 
+/// encoder from VP8/WebM
 pub struct VP8Writer<W> {
     low_value: u32,
     range: u32,

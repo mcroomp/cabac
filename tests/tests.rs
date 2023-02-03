@@ -186,7 +186,7 @@ fn test_random_sequences() {
 
     let mut seq = Vec::new();
 
-    for i in 0..10000 {
+    for _i in 0..10000 {
         seed = seed.wrapping_mul(10000019) + 7;
 
         seq.push(match seed % 4 {

@@ -135,6 +135,7 @@ impl H265Context {
     }
 }
 
+/// CABAC encoder from H264/H265
 pub struct H265Writer<W> {
     writer: W,
     low: u32,
@@ -278,6 +279,7 @@ impl<W: Write> H265Writer<W> {
     }
 }
 
+/// CABAC decoder from H265/H265
 pub struct H265Reader<R> {
     reader: R,
     value: u32,
