@@ -1,0 +1,11 @@
+CABAC Library for Rust Copyright (c) Kristof Roomp
+
+-------------------
+
+This software includes parts of the Libwebp project https://github.com/strukturag/libde265/ 
+licensed under the terms of the GNU Lesser General Public License, you can find a copy of this license at https://github.com/strukturag/libde265/blob/master/COPYING
+
+-------------------
+
+This software includes parts of the Libwebp project https://github.com/webmproject/libwebp
+licensed under BSD 3-Clause License, you can find a copy of this license at https://github.com/webmproject/libwebp/blob/main/COPYING
