@@ -167,8 +167,6 @@ impl<W: Write> CabacWriter<H265Context> for H265Writer<W> {
         self.range -= u32::from(lps);
 
         if value != cur_ctx.get_mps() {
-            //logtrace(LogCABAC,"LPS\n");
-
             let num_bits = RENORM_TABLE[usize::from(lps >> 3)];
             self.low = (self.low + self.range) << num_bits;
             self.range = u32::from(lps) << num_bits;
@@ -177,8 +175,6 @@ impl<W: Write> CabacWriter<H265Context> for H265Writer<W> {
 
             self.bits_left -= i32::from(num_bits);
         } else {
-            //logtrace(LogCABAC,"MPS\n");
-
             cur_ctx.update_mps();
 
             // renorm

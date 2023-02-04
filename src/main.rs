@@ -7,12 +7,12 @@ use cabac::{
 };
 
 fn pattern(i: i32) -> bool {
-    i % 3 == 0
+    i % 111 == 0
 }
 
 const LOOP: i32 = 100 * 1024;
 
-fn norm_vp8() {
+fn norm_vp8(print: bool) {
     let mut output = Vec::with_capacity(1000);
     {
         let mut writer = VP8Writer::new(&mut output).unwrap();
@@ -31,9 +31,13 @@ fn norm_vp8() {
             assert_eq!(reader.get(&mut context).unwrap(), pattern(i));
         }
     }
+
+    if print {
+        println!("norm_vp8 = {0}", output.len() * 8);
+    }
 }
 
-fn norm_h265() {
+fn norm_h265(print: bool) {
     let mut output = Vec::with_capacity(1000);
     {
         let mut writer = H265Writer::new(&mut output);
@@ -52,9 +56,13 @@ fn norm_h265() {
             assert_eq!(reader.get(&mut context).unwrap(), pattern(i));
         }
     }
+
+    if print {
+        println!("norm_h265 = {0}", output.len() * 8);
+    }
 }
 
-fn bypass_vp8() {
+fn bypass_vp8(print: bool) {
     let mut output = Vec::with_capacity(1000);
     {
         let mut writer = VP8Writer::new(&mut output).unwrap();
@@ -71,9 +79,13 @@ fn bypass_vp8() {
             assert_eq!(reader.get_bypass().unwrap(), pattern(i));
         }
     }
+
+    if print {
+        println!("bypass_vp8 = {0}", output.len() * 8);
+    }
 }
 
-fn bypass_h265() {
+fn bypass_h265(print: bool) {
     let mut output = Vec::with_capacity(1000);
     {
         let mut writer = H265Writer::new(&mut output);
@@ -89,14 +101,18 @@ fn bypass_h265() {
         for i in 0..LOOP {
             assert_eq!(reader.get_bypass().unwrap(), pattern(i));
         }
+    }
+
+    if print {
+        println!("bypass_h265 = {0}", output.len() * 8);
     }
 }
 
 fn main() {
-    for _i in 0..1024 {
-        bypass_h265();
-        bypass_vp8();
-        norm_h265();
-        norm_vp8();
+    for i in 0..1024 {
+        bypass_h265(i == 1023);
+        bypass_vp8(i == 1023);
+        norm_h265(i == 1023);
+        norm_vp8(i == 1023);
     }
 }
