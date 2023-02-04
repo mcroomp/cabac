@@ -4,33 +4,35 @@ use cabac::h265::{H265Reader, H265Writer};
 use cabac::traits::{CabacReader, CabacWriter};
 
 use cabac::vp8::{VP8Reader, VP8Writer};
-use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
+use criterion::{criterion_group, criterion_main, Bencher, Criterion};
+
+fn pattern(i: i32) -> bool {
+    i % 3 == 0
+}
 
 fn alternating_get_init<CONTEXT: Default, CW: CabacWriter<CONTEXT>>(writer: &mut CW) {
     let mut context = CONTEXT::default();
     for i in 0..1024 {
-        writer.put((i & 1) != 0, &mut context).unwrap();
+        writer.put(pattern(i), &mut context).unwrap();
     }
 }
 
 fn alternating_get_run<CONTEXT: Default, CR: CabacReader<CONTEXT>>(reader: &mut CR) {
     let mut context = CONTEXT::default();
-    for _i in 0..1024 {
-        let x = reader.get(&mut context).unwrap();
-        black_box(x);
+    for i in 0..1024 {
+        assert_eq!(pattern(i), reader.get(&mut context).unwrap());
     }
 }
 
 fn bypass_init<CONTEXT: Default, CW: CabacWriter<CONTEXT>>(writer: &mut CW) {
     for i in 0..1024 {
-        writer.put_bypass((i & 1) != 0).unwrap();
+        writer.put_bypass(pattern(i)).unwrap();
     }
 }
 
 fn bypass_run<CONTEXT: Default, CR: CabacReader<CONTEXT>>(reader: &mut CR) {
-    for _i in 0..1024 {
-        let x = reader.get_bypass().unwrap();
-        black_box(x);
+    for i in 0..1024 {
+        assert_eq!(pattern(i), reader.get_bypass().unwrap())
     }
 }
 

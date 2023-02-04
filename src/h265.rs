@@ -146,9 +146,9 @@ pub struct H265Writer<W> {
 }
 
 impl<W: Write> CabacWriter<H265Context> for H265Writer<W> {
-    fn put_bypass(&mut self, bin_value: bool) -> Result<()> {
+    fn put_bypass(&mut self, value: bool) -> Result<()> {
         self.low <<= 1;
-        if bin_value {
+        if value {
             self.low += self.range;
         }
 
@@ -298,12 +298,14 @@ impl<R: Read> CabacReader<H265Context> for H265Reader<R> {
         }
 
         let scaled_range = self.range << 7;
-        if self.value >= scaled_range {
-            self.value -= scaled_range;
 
-            Ok(true)
-        } else {
+        let r = self.value.overflowing_sub(scaled_range);
+
+        if r.1 {
             Ok(false)
+        } else {
+            self.value = r.0;
+            Ok(true)
         }
     }
 
@@ -319,7 +321,9 @@ impl<R: Read> CabacReader<H265Context> for H265Reader<R> {
 
         let bit;
 
-        if value < scaled_range {
+        let r = value.overflowing_sub(scaled_range);
+
+        if r.1 {
             // MPS path
 
             bit = cur_ctx.get_mps();
@@ -341,7 +345,7 @@ impl<R: Read> CabacReader<H265Context> for H265Reader<R> {
         } else {
             // LPS path
 
-            value -= scaled_range;
+            value = r.0;
 
             let num_bits = RENORM_TABLE[usize::from(lps >> 3)];
             value <<= num_bits;

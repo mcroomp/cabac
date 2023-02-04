@@ -114,57 +114,77 @@ pub struct VP8Reader<R> {
 
 impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
     fn get(&mut self, branch: &mut VP8Context) -> Result<bool> {
-        if self.count < 0 {
-            self.vpx_reader_fill()?;
+        let mut count = self.count;
+        let mut value = self.value;
+        let mut range = self.range;
+
+        if count < 0 {
+            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut count)?;
         }
 
         let prob = branch.get_probability() as u32;
 
-        let split = ((self.range * prob) + (256 - prob)) >> BITS_IN_BYTE;
+        let split = ((range * prob) + (256 - prob)) >> BITS_IN_BYTE;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
-        let bit = self.value >= big_split;
 
-        if bit {
-            branch.record_and_update_true_obs();
-            self.range = self.range - split;
-            self.value -= big_split;
-        } else {
+        let r = value.overflowing_sub(big_split);
+
+        if r.1 {
             branch.record_and_update_false_obs();
-            self.range = split;
+            range = split;
+
+            //lookup tables are best avoided in modern CPUs
+            //let shift = VPX_NORM[self.range as usize] as i32;
+            let shift = (range as u8).leading_zeros() as i32;
+
+            self.value = value << shift;
+            self.count = count - shift;
+            self.range = range << shift;
+
+            return Ok(false);
+        } else {
+            branch.record_and_update_true_obs();
+            range = range - split;
+            value = r.0;
+
+            //lookup tables are best avoided in modern CPUs
+            //let shift = VPX_NORM[self.range as usize] as i32;
+            let shift = (range as u8).leading_zeros() as i32;
+
+            self.value = value << shift;
+            self.count = count - shift;
+            self.range = range << shift;
+
+            return Ok(true);
         }
-
-        //lookup tables are best avoided in modern CPUs
-        //let shift = VPX_NORM[self.range as usize] as i32;
-        let shift = (self.range as u8).leading_zeros() as i32;
-
-        self.value <<= shift;
-        self.count -= shift;
-        self.range <<= shift;
-
-        return Ok(bit);
     }
 
     fn get_bypass(&mut self) -> Result<bool> {
-        if self.count < 0 {
-            self.vpx_reader_fill()?;
+        let mut count = self.count;
+        let mut value = self.value;
+        let range = self.range;
+
+        if count < 0 {
+            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut count)?;
         }
 
-        let split = (self.range + 1) >> 1;
+        let split = (range + 1) >> 1;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
-        let bit = self.value >= big_split;
 
-        if bit {
-            self.range = self.range - split;
-            self.value -= big_split;
+        let r = value.overflowing_sub(big_split);
+        if r.1 {
+            self.value = value << 1;
+            self.count = count - 1;
+            self.range = split << 1;
+
+            Ok(false)
         } else {
-            self.range = split;
+            self.value = r.0 << 1;
+            self.count = count - 1;
+            self.range = (range - split) << 1;
+
+            Ok(true)
         }
-
-        self.value <<= 1;
-        self.count -= 1;
-        self.range <<= 1;
-
-        return Ok(bit);
     }
 }
 
@@ -177,7 +197,7 @@ impl<R: Read> VP8Reader<R> {
             range: 255,
         };
 
-        r.vpx_reader_fill()?;
+        Self::vpx_reader_fill(&mut r.reader, &mut r.value, &mut r.count)?;
 
         let mut dummy_branch = VP8Context::default();
         r.get(&mut dummy_branch)?; // marker bit
@@ -186,20 +206,20 @@ impl<R: Read> VP8Reader<R> {
     }
 
     #[inline(always)]
-    fn vpx_reader_fill(&mut self) -> Result<()> {
-        let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE - (self.count + BITS_IN_BYTE);
+    fn vpx_reader_fill(reader: &mut R, value: &mut u64, count: &mut i32) -> Result<()> {
+        let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE - (*count + BITS_IN_BYTE);
 
         while shift >= 0 {
             // BufReader is already pretty efficient handling small reads, so optimization doesn't help that much
             let mut v = [0u8; 1];
-            let bytes_read = self.reader.read(&mut v[..])?;
+            let bytes_read = reader.read(&mut v[..])?;
             if bytes_read == 0 {
                 break;
             }
 
-            self.value |= (v[0] as u64) << shift;
+            *value |= (v[0] as u64) << shift;
             shift -= BITS_IN_BYTE;
-            self.count += BITS_IN_BYTE;
+            *count += BITS_IN_BYTE;
         }
 
         return Ok(());
