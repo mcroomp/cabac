@@ -1,0 +1,205 @@
+use std::io::Cursor;
+
+use cabac::h265::{H265Reader, H265Writer};
+use cabac::traits::{CabacReader, CabacWriter};
+
+use cabac::vp8::{VP8Reader, VP8Writer};
+use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
+
+fn alternating_get_init<CONTEXT: Default, CW: CabacWriter<CONTEXT>>(writer: &mut CW) {
+    let mut context = CONTEXT::default();
+    for i in 0..1024 {
+        writer.put((i & 1) != 0, &mut context).unwrap();
+    }
+}
+
+fn alternating_get_run<CONTEXT: Default, CR: CabacReader<CONTEXT>>(reader: &mut CR) {
+    let mut context = CONTEXT::default();
+    for _i in 0..1024 {
+        let x = reader.get(&mut context).unwrap();
+        black_box(x);
+    }
+}
+
+fn bypass_init<CONTEXT: Default, CW: CabacWriter<CONTEXT>>(writer: &mut CW) {
+    for i in 0..1024 {
+        writer.put_bypass((i & 1) != 0).unwrap();
+    }
+}
+
+fn bypass_run<CONTEXT: Default, CR: CabacReader<CONTEXT>>(reader: &mut CR) {
+    for _i in 0..1024 {
+        let x = reader.get_bypass().unwrap();
+        black_box(x);
+    }
+}
+
+fn test_vp8(
+    b: &mut Bencher,
+    init_fn: fn(&mut VP8Writer<&mut Vec<u8>>),
+    run_fn: fn(&mut VP8Reader<Cursor<&Vec<u8>>>),
+) {
+    b.iter_batched(
+        || {
+            let mut output = Vec::new();
+            let mut w = VP8Writer::new(&mut output).unwrap();
+
+            init_fn(&mut w);
+
+            w.finish().unwrap();
+
+            //state.init(&mut output, |cw| init_fn(cw));
+            output
+        },
+        |s| {
+            let mut r = VP8Reader::new(Cursor::new(&s)).unwrap();
+            run_fn(&mut r);
+        },
+        criterion::BatchSize::LargeInput,
+    );
+}
+
+fn test_h265(
+    b: &mut Bencher,
+    init_fn: fn(&mut H265Writer<&mut Vec<u8>>),
+    run_fn: fn(&mut H265Reader<Cursor<&Vec<u8>>>),
+) {
+    b.iter_batched(
+        || {
+            let mut output = Vec::new();
+            let mut w = H265Writer::new(&mut output);
+
+            init_fn(&mut w);
+
+            w.finish().unwrap();
+
+            //state.init(&mut output, |cw| init_fn(cw));
+            output
+        },
+        |s| {
+            let mut r = H265Reader::new(Cursor::new(&s)).unwrap();
+            run_fn(&mut r);
+        },
+        criterion::BatchSize::LargeInput,
+    );
+}
+
+/*
+
+
+
+impl RState
+{
+    fn get_init<CONTEXT : Default, CW : CabacWriter<CONTEXT>>(writer: &mut CW)
+    {
+        let mut context = CONTEXT::default();
+        for i in 0..1024
+        {
+            writer.put((i & 1) != 0, &mut context).unwrap();
+        }
+    }
+
+    fn get_test<CONTEXT : Default, CR : CabacReader<CONTEXT>>(reader: &mut CR)
+    {
+        let mut context = CONTEXT::default();
+        for _i in 0..1024
+        {
+           let _ = reader.get(&mut context);
+        }
+    }
+
+    fn get_bypass_init<CONTEXT : Default, CW : CabacWriter<CONTEXT>>(writer: &mut CW)
+    {
+        let mut context = CONTEXT::default();
+        for i in 0..1024
+        {
+            writer.put((i & 1) != 0, &mut context).unwrap();
+        }
+    }
+
+    fn get_bypass_test<CONTEXT : Default, CR : CabacReader<CONTEXT>>(reader: &mut CR)
+    {
+        let mut context = CONTEXT::default();
+        for _i in 0..1024
+        {
+           let _ = reader.get(&mut context);
+        }
+    }
+
+    fn init_h265()-> Self
+    {
+        let mut output = Vec::new();
+        let mut writer = H265Writer::new(&mut output);
+
+        Self::get_init(&mut writer);
+
+        RState {output : output}
+    }
+
+    fn run_h265(&self)
+    {
+        let mut reader = H265Reader::new(Cursor::new(&self.output)).unwrap();
+
+        Self::get_test(&mut reader);
+    }
+
+
+    fn init_h265_bypass()-> Self
+    {
+        let mut output = Vec::new();
+        let mut writer = H265Writer::new(&mut output);
+
+        Self::get_bypass_init(&mut writer);
+
+        RState {output : output}
+    }
+
+    fn run_h265_bypass(&self)
+    {
+        let mut reader = H265Reader::new(Cursor::new(&self.output)).unwrap();
+
+        Self::get_bypass_test(&mut reader);
+    }
+
+
+    fn init_vp8()-> Self
+    {
+        let mut output = Vec::new();
+        let mut context = VP8Context::default();
+        let mut writer = VP8Writer::new(&mut output).unwrap();
+
+        Self::get_init(&mut writer);
+
+        RState {output : output}
+    }
+
+    fn run_vp8(&self)
+    {
+        let mut reader = VP8Reader::new(Cursor::new(&self.output)).unwrap();
+
+        Self::get_test(&mut reader);
+    }
+
+}
+*/
+
+fn criterion_benchmark(c: &mut Criterion) {
+    c.bench_function("VP8 read", |b| {
+        test_vp8(b, |r| alternating_get_init(r), |r| alternating_get_run(r));
+    });
+
+    c.bench_function("H265 read", |b| {
+        test_h265(b, |r| alternating_get_init(r), |r| alternating_get_run(r));
+    });
+
+    c.bench_function("VP8 bypass", |b| {
+        test_vp8(b, |r| bypass_init(r), |r| bypass_run(r));
+    });
+
+    c.bench_function("H265 bypass", |b| {
+        test_h265(b, |r| bypass_init(r), |r| bypass_run(r));
+    });
+}
+
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);

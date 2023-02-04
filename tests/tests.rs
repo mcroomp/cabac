@@ -1,6 +1,8 @@
 use std::io::Cursor;
 
+use cabac::h265::{H265Context, H265Reader, H265Writer};
 use cabac::traits::{CabacReader, CabacWriter};
+use cabac::vp8::{VP8Context, VP8Reader, VP8Writer};
 
 fn set_bits<CONTEXT, CW: CabacWriter<CONTEXT>>(
     writer: &mut CW,
@@ -48,8 +50,6 @@ fn test_bits<CONTEXT, CR: CabacReader<CONTEXT>>(
 }
 
 fn test_permutation_h264(pattern: u64, num_bits: u8, bypass_index: u8) {
-    use cabac::h265::{H265Context, H265Reader, H265Writer};
-
     let mut output = Vec::new();
     {
         let mut context = H265Context::default();
@@ -67,8 +67,6 @@ fn test_permutation_h264(pattern: u64, num_bits: u8, bypass_index: u8) {
 }
 
 fn test_permutation_vp8(pattern: u64, num_bits: u8, bypass_index: u8) {
-    use cabac::vp8::{VP8Context, VP8Reader, VP8Writer};
-
     let mut output = Vec::new();
     {
         let mut context = VP8Context::default();
@@ -91,8 +89,6 @@ enum Seq {
 }
 
 fn test_seq_vp8(seq: &[Seq]) {
-    use cabac::vp8::{VP8Context, VP8Reader, VP8Writer};
-
     let mut output = Vec::new();
     {
         let mut context = VP8Context::default();
@@ -127,8 +123,6 @@ fn test_seq_vp8(seq: &[Seq]) {
 }
 
 fn test_seq_h265(seq: &[Seq]) {
-    use cabac::h265::{H265Context, H265Reader, H265Writer};
-
     let mut output = Vec::new();
     {
         let mut context = H265Context::default();
@@ -158,6 +152,46 @@ fn test_seq_h265(seq: &[Seq]) {
                     assert_eq!(*b, reader.get_bypass().unwrap())
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn bypass_vp8() {
+    let mut output = Vec::new();
+    {
+        let mut writer = VP8Writer::new(&mut output).unwrap();
+        for i in 0..1024 {
+            writer.put_bypass((i & 1) != 0).unwrap();
+        }
+
+        writer.finish().unwrap();
+    }
+
+    {
+        let mut reader = VP8Reader::new(Cursor::new(&output)).unwrap();
+        for i in 0..1024 {
+            assert_eq!(reader.get_bypass().unwrap(), (i & 1) != 0);
+        }
+    }
+}
+
+#[test]
+fn bypass_h265() {
+    let mut output = Vec::new();
+    {
+        let mut writer = H265Writer::new(&mut output);
+        for i in 0..1024 {
+            writer.put_bypass((i & 1) != 0).unwrap();
+        }
+
+        writer.finish().unwrap();
+    }
+
+    {
+        let mut reader = H265Reader::new(Cursor::new(&output)).unwrap();
+        for i in 0..1024 {
+            assert_eq!(reader.get_bypass().unwrap(), (i & 1) != 0);
         }
     }
 }

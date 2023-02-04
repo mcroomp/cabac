@@ -149,9 +149,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             self.vpx_reader_fill()?;
         }
 
-        let prob = 128;
-
-        let split = ((self.range * prob) + (256 - prob)) >> BITS_IN_BYTE;
+        let split = (self.range + 1) >> 1;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
         let bit = self.value >= big_split;
 
@@ -162,13 +160,9 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             self.range = split;
         }
 
-        //lookup tables are best avoided in modern CPUs
-        //let shift = VPX_NORM[self.range as usize] as i32;
-        let shift = (self.range as u8).leading_zeros() as i32;
-
-        self.value <<= shift;
-        self.count -= shift;
-        self.range <<= shift;
+        self.value <<= 1;
+        self.count -= 1;
+        self.range <<= 1;
 
         return Ok(bit);
     }
@@ -191,6 +185,7 @@ impl<R: Read> VP8Reader<R> {
         return Ok(r);
     }
 
+    #[inline(always)]
     fn vpx_reader_fill(&mut self) -> Result<()> {
         let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE - (self.count + BITS_IN_BYTE);
 
@@ -329,10 +324,7 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
     }
 
     fn put_bypass(&mut self, value: bool) -> Result<()> {
-        let probability = 128;
-
-        let split = 1 + (((self.range - 1) * probability) >> 8);
-
+        let split = (self.range + 1) >> 1;
         if value {
             self.low_value += split;
             self.range -= split;
@@ -340,13 +332,11 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
             self.range = split;
         }
 
-        //lookup tables are best avoided in modern CPUs
-        //let mut shift = VPX_NORM[self.range as usize] as i32;
-        let shift = self.range.leading_zeros() as i32 - 24;
+        let shift = 1;
 
         self.range <<= shift;
 
-        self.count += shift;
+        self.count += 1;
 
         if self.count >= 0 {
             self.send_to_output(shift)?;

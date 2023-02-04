@@ -14,4 +14,11 @@ exclude = [ "tests/*" ]
 [dependencies]
 byteorder = "1.4.3"
 
+[dev-dependencies]
+criterion = "0.4"
+
 [lib]
+
+[[bench]]
+name = "benches"
+harness = false
