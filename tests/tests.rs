@@ -216,21 +216,23 @@ fn test_basic_permutations_h264() {
 
 #[test]
 fn test_random_sequences() {
-    let mut seed: u32 = 27;
+    for i in 1..27 {
+        let mut seed: u32 = 27 + i;
 
-    let mut seq = Vec::new();
+        let mut seq = Vec::new();
 
-    for _i in 0..10000 {
-        seed = seed.wrapping_mul(10000019) + 7;
+        for _i in 0..10000 {
+            seed = seed.wrapping_mul(10000019) + 7;
 
-        seq.push(match seed % 4 {
-            0 => Seq::Normal(true),
-            1 => Seq::Normal(false),
-            2 => Seq::Bypass(false),
-            _ => Seq::Bypass(true),
-        });
+            seq.push(match seed % 4 {
+                0 => Seq::Normal(true),
+                1 => Seq::Normal(false),
+                2 => Seq::Bypass(false),
+                _ => Seq::Bypass(true),
+            });
+        }
+
+        test_seq_h265(&seq);
+        test_seq_vp8(&seq);
     }
-
-    test_seq_h265(&seq);
-    test_seq_vp8(&seq);
 }

@@ -168,20 +168,18 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             Self::vpx_reader_fill(&mut self.reader, &mut value, &mut count)?;
         }
 
-        let split = (range + 1) >> 1;
+        let split = range >> 1;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
 
         let r = value.overflowing_sub(big_split);
         if r.1 {
             self.value = value << 1;
             self.count = count - 1;
-            self.range = split << 1;
 
             Ok(false)
         } else {
             self.value = r.0 << 1;
             self.count = count - 1;
-            self.range = (range - split) << 1;
 
             Ok(true)
         }
@@ -344,24 +342,17 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
     }
 
     fn put_bypass(&mut self, value: bool) -> Result<()> {
-        let split = (self.range + 1) >> 1;
+        let split = self.range >> 1;
         if value {
             self.low_value += split;
-            self.range -= split;
-        } else {
-            self.range = split;
         }
-
-        let shift = 1;
-
-        self.range <<= shift;
 
         self.count += 1;
 
         if self.count >= 0 {
-            self.send_to_output(shift)?;
+            self.send_to_output(1)?;
         } else {
-            self.low_value <<= shift;
+            self.low_value <<= 1;
         }
 
         Ok(())
