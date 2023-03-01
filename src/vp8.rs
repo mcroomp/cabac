@@ -108,18 +108,18 @@ impl VP8Context {
 pub struct VP8Reader<R> {
     value: u64,
     range: u32,
-    count: i32,
+    bits_needed: i32,
     reader: R,
 }
 
 impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
     fn get(&mut self, branch: &mut VP8Context) -> Result<bool> {
-        let mut count = self.count;
+        let mut bits_left = self.bits_needed;
         let mut value = self.value;
         let mut range = self.range;
 
-        if count < 0 {
-            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut count)?;
+        if bits_left > 0 {
+            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut bits_left)?;
         }
 
         let prob = branch.get_probability() as u32;
@@ -138,7 +138,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             let shift = (range as u8).leading_zeros() as i32;
 
             self.value = value << shift;
-            self.count = count - shift;
+            self.bits_needed = bits_left + shift;
             self.range = range << shift;
 
             return Ok(false);
@@ -152,7 +152,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             let shift = (range as u8).leading_zeros() as i32;
 
             self.value = value << shift;
-            self.count = count - shift;
+            self.bits_needed = bits_left + shift;
             self.range = range << shift;
 
             return Ok(true);
@@ -160,12 +160,12 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
     }
 
     fn get_bypass(&mut self) -> Result<bool> {
-        let mut count = self.count;
+        let mut bits_needed = self.bits_needed;
         let mut value = self.value;
         let range = self.range;
 
-        if count < 0 {
-            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut count)?;
+        if bits_needed > 0 {
+            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut bits_needed)?;
         }
 
         let split = range >> 1;
@@ -174,12 +174,12 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
         let r = value.overflowing_sub(big_split);
         if r.1 {
             self.value = value << 1;
-            self.count = count - 1;
+            self.bits_needed = bits_needed + 1;
 
             Ok(false)
         } else {
             self.value = r.0 << 1;
-            self.count = count - 1;
+            self.bits_needed = bits_needed + 1;
 
             Ok(true)
         }
@@ -191,11 +191,11 @@ impl<R: Read> VP8Reader<R> {
         let mut r = VP8Reader {
             reader,
             value: 0,
-            count: -8,
+            bits_needed: 8,
             range: 255,
         };
 
-        Self::vpx_reader_fill(&mut r.reader, &mut r.value, &mut r.count)?;
+        Self::vpx_reader_fill(&mut r.reader, &mut r.value, &mut r.bits_needed)?;
 
         let mut dummy_branch = VP8Context::default();
         r.get(&mut dummy_branch)?; // marker bit
@@ -204,8 +204,8 @@ impl<R: Read> VP8Reader<R> {
     }
 
     #[inline(always)]
-    fn vpx_reader_fill(reader: &mut R, value: &mut u64, count: &mut i32) -> Result<()> {
-        let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE - (*count + BITS_IN_BYTE);
+    fn vpx_reader_fill(reader: &mut R, value: &mut u64, bits_needed: &mut i32) -> Result<()> {
+        let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE + *bits_needed - BITS_IN_BYTE;
 
         while shift >= 0 {
             // BufReader is already pretty efficient handling small reads, so optimization doesn't help that much
@@ -217,7 +217,7 @@ impl<R: Read> VP8Reader<R> {
 
             *value |= (v[0] as u64) << shift;
             shift -= BITS_IN_BYTE;
-            *count += BITS_IN_BYTE;
+            *bits_needed -= BITS_IN_BYTE;
         }
 
         return Ok(());
@@ -228,7 +228,7 @@ impl<R: Read> VP8Reader<R> {
 pub struct VP8Writer<W> {
     low_value: u32,
     range: u32,
-    count: i32,
+    bits_left: i32,
     writer: W,
     buffer: Vec<u8>,
 }
@@ -238,7 +238,7 @@ impl<W: Write> VP8Writer<W> {
         let mut retval = VP8Writer {
             low_value: 0,
             range: 255,
-            count: -24,
+            bits_left: -24,
             buffer: Vec::new(),
             writer: writer,
         };
@@ -266,7 +266,7 @@ impl<W: Write> VP8Writer<W> {
     }
 
     fn send_to_output(&mut self, shift: i32) -> Result<()> {
-        let offset = shift - self.count;
+        let offset = shift - self.bits_left;
         if ((self.low_value << (offset - 1)) & 0x80000000) != 0 {
             let mut x = self.buffer.len() - 1;
 
@@ -282,8 +282,8 @@ impl<W: Write> VP8Writer<W> {
         self.buffer.push((self.low_value >> (24 - offset)) as u8);
         self.low_value <<= offset;
         self.low_value &= 0xffffff;
-        self.low_value <<= self.count;
-        self.count -= 8;
+        self.low_value <<= self.bits_left;
+        self.bits_left -= 8;
 
         if self.buffer.len() > 65536 - 128 {
             self.flush_non_final_data()?;
@@ -314,9 +314,9 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
 
         self.range <<= shift;
 
-        self.count += shift;
+        self.bits_left += shift;
 
-        if self.count >= 0 {
+        if self.bits_left >= 0 {
             self.send_to_output(shift)?;
         } else {
             self.low_value <<= shift;
@@ -347,9 +347,9 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
             self.low_value += split;
         }
 
-        self.count += 1;
+        self.bits_left += 1;
 
-        if self.count >= 0 {
+        if self.bits_left >= 0 {
             self.send_to_output(1)?;
         } else {
             self.low_value <<= 1;
