@@ -106,28 +106,31 @@ impl VP8Context {
 
 /// decoder from VP8/WebM
 pub struct VP8Reader<R> {
-    value: u64,
-    range: u32,
+    big_value: u64,
+    range: u8,
     bits_needed: i32,
     reader: R,
+}
+
+#[inline(always)]
+fn upper_mul(a: u8, b: u8) -> u8 {
+    (((a as u16) * (b as u16)) >> 8) as u8
 }
 
 impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
     fn get(&mut self, branch: &mut VP8Context) -> Result<bool> {
         let mut bits_needed = self.bits_needed;
-        let mut value = self.value;
+        let mut big_value = self.big_value;
         let mut range = self.range;
 
         if bits_needed > 0 {
-            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut bits_needed)?;
+            Self::vpx_reader_fill(&mut self.reader, &mut big_value, &mut bits_needed)?;
         }
 
-        let prob = branch.get_probability() as u32;
-
-        let split = ((range * prob) + (256 - prob)) >> BITS_IN_BYTE;
+        let split = upper_mul(range - 1, branch.get_probability()) + 1;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
 
-        let r = value.overflowing_sub(big_split);
+        let r = big_value.overflowing_sub(big_split);
 
         if r.1 {
             branch.record_and_update_false_obs();
@@ -135,9 +138,9 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
 
             //lookup tables are best avoided in modern CPUs
             //let shift = VPX_NORM[self.range as usize] as i32;
-            let shift = (range as u8).leading_zeros() as i32;
+            let shift = range.leading_zeros() as i32;
 
-            self.value = value << shift;
+            self.big_value = big_value << shift;
             self.bits_needed = bits_needed + shift;
             self.range = range << shift;
 
@@ -145,13 +148,13 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
         } else {
             branch.record_and_update_true_obs();
             range = range - split;
-            value = r.0;
+            big_value = r.0;
 
             //lookup tables are best avoided in modern CPUs
             //let shift = VPX_NORM[self.range as usize] as i32;
-            let shift = (range as u8).leading_zeros() as i32;
+            let shift = range.leading_zeros() as i32;
 
-            self.value = value << shift;
+            self.big_value = big_value << shift;
             self.bits_needed = bits_needed + shift;
             self.range = range << shift;
 
@@ -161,7 +164,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
 
     fn get_bypass(&mut self) -> Result<bool> {
         let mut bits_needed = self.bits_needed;
-        let mut value = self.value;
+        let mut value = self.big_value;
         let range = self.range;
 
         if bits_needed > 0 {
@@ -173,12 +176,12 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
 
         let r = value.overflowing_sub(big_split);
         if r.1 {
-            self.value = value << 1;
+            self.big_value = value << 1;
             self.bits_needed = bits_needed + 1;
 
             Ok(false)
         } else {
-            self.value = r.0 << 1;
+            self.big_value = r.0 << 1;
             self.bits_needed = bits_needed + 1;
 
             Ok(true)
@@ -190,12 +193,12 @@ impl<R: Read> VP8Reader<R> {
     pub fn new(reader: R) -> Result<Self> {
         let mut r = VP8Reader {
             reader,
-            value: 0,
+            big_value: 0,
             bits_needed: 8,
             range: 255,
         };
 
-        Self::vpx_reader_fill(&mut r.reader, &mut r.value, &mut r.bits_needed)?;
+        Self::vpx_reader_fill(&mut r.reader, &mut r.big_value, &mut r.bits_needed)?;
 
         let mut dummy_branch = VP8Context::default();
         r.get(&mut dummy_branch)?; // marker bit
