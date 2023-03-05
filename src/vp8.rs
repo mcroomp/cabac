@@ -114,12 +114,12 @@ pub struct VP8Reader<R> {
 
 impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
     fn get(&mut self, branch: &mut VP8Context) -> Result<bool> {
-        let mut bits_left = self.bits_needed;
+        let mut bits_needed = self.bits_needed;
         let mut value = self.value;
         let mut range = self.range;
 
-        if bits_left > 0 {
-            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut bits_left)?;
+        if bits_needed > 0 {
+            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut bits_needed)?;
         }
 
         let prob = branch.get_probability() as u32;
@@ -138,7 +138,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             let shift = (range as u8).leading_zeros() as i32;
 
             self.value = value << shift;
-            self.bits_needed = bits_left + shift;
+            self.bits_needed = bits_needed + shift;
             self.range = range << shift;
 
             return Ok(false);
@@ -152,7 +152,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             let shift = (range as u8).leading_zeros() as i32;
 
             self.value = value << shift;
-            self.bits_needed = bits_left + shift;
+            self.bits_needed = bits_needed + shift;
             self.range = range << shift;
 
             return Ok(true);
