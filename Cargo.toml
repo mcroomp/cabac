@@ -18,7 +18,7 @@ debug=true
 byteorder = "1.4.3"
 
 [dev-dependencies]
-criterion = "0.4"
+criterion = "0.5.1"
 
 [lib]
 

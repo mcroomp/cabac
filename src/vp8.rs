@@ -24,18 +24,26 @@ const BITS_IN_BYTE: i32 = 8;
 const BITS_IN_LONG: i32 = 64;
 const BITS_IN_LONG_MINUS_LAST_BYTE: i32 = BITS_IN_LONG - BITS_IN_BYTE;
 
-/// context for VP8 encoder/decoder. Consists of two 8 bit counts (one for true, one for false).
+/// context for VP8 encoder/decoder. Consists of two 8 bit counts (lower byte for true, top byte for false).
+/// the probability of the next symbol being zero is false_count / (false_count + true_count)
 pub struct VP8Context {
     counts: u16,
 }
 
 impl Default for VP8Context {
+    /// default value is balanced between zeros or ones
     fn default() -> Self {
         VP8Context { counts: 0x101 }
     }
 }
 
-// used to precalculate the probabilities
+/// precalculate the probabilities to avoid doing division during the hot loop.
+/// Unfortunately this lookup table is kind of large (too big to fit in CPU L1 in many cases).
+/// I tested against the other option of multiplying by the reciprocal
+/// (which would only require a 2 * 512 byte lookup table and a multiply) and it was significantly slower.
+///
+/// I suspect the reason is that there are some very common probability patterns that result in those cache
+/// lines staying in L1 cache, with only the rarer patterns causing cache misses.
 const fn problookup() -> [u8; 65536] {
     let mut retval = [0; 65536];
     let mut i = 1i32;
@@ -57,129 +65,52 @@ impl VP8Context {
         Self { counts: 0x0101 }
     }
 
+    /// returns the probability of the next symbol being zero (in the range 0-255)
     #[inline(always)]
     pub fn get_probability(&self) -> u8 {
-        // 0x00ff is a special corner case which should return probability 0
-        // since 0x00ff is impossible to happen since the counts always start at 1
         PROB_LOOKUP[self.counts as usize]
     }
 
+    /// called to adjust the probability in the context when the observed symbol zero true
     #[inline(always)]
     pub fn record_and_update_true_obs(&mut self) {
         if (self.counts & 0xff) != 0xff {
             // non-overflow case is easy
             self.counts += 1;
         } else {
-            // special case where it is all trues
+            // if we would have overflowed, then we renormalize by dividing everything by 2 (rounding up),
+            // except in the case where we've only seen true (false count = 1), in which case we keep the probability at 0.
+            // In order to slightly improve the compression for large runs of true, we keep an extra state of 0x00ff (which is normally illegal)
+            // to represent the case where we've only seen true, and we keep the probability at 0.
+
             if self.counts <= 0x01ff {
-                // corner case since the original implementation
-                // insists on setting the probabily to zero,
-                // although the probability calculation would
-                // return 1.
                 self.counts = 0x00ff;
             } else {
+                // if we would have overflowed, then we renormalize by dividing everything by 2 (rounding up)
                 self.counts = (((self.counts as u32 + 0x100) >> 1) & 0xff00) as u16 | 129;
             }
         }
     }
 
+    /// called to adjust the probability in the context when the observed symbol zero true
     #[inline(always)]
     pub fn record_and_update_false_obs(&mut self) {
         let (result, overflow) = self.counts.overflowing_add(0x100);
         if !overflow {
             if self.counts == 0x00ff {
-                // handle corner case where prob was set to zero (purely for compatibility, remove this if there is a breaking change in the format)
+                // for backwards compatibility to the C++ implementation, we jump from 0x00ff to 0x02ff although
+                // this is unnecessary for correctness and could remove this if backwards compatibility is not needed
                 self.counts = 0x02ff;
-                return;
+            } else {
+                self.counts = result;
             }
-            self.counts = result;
         } else {
-            // special case where it is all falses
+            // if we would have overflowed, then we renormalize by dividing everything by 2 (rounding up),
+            // except in the case where we've only seen false (true count = 1), in which case we keep the probability at 255
+            // which slighly improves the compression ratio
             if self.counts != 0xff01 {
                 self.counts = ((1 + (self.counts & 0xff) as u32) >> 1) as u16 | 0x8100;
             }
-        }
-    }
-}
-
-/// run through all the possible combinations of counts and ensure that the probability is the same
-#[test]
-fn test_all_probabilities() {
-    /// This is copied from the C++ implementation to ensure that the behavior is the same
-    struct OriginalImplForTest {
-        counts: [u8; 2],
-        probability: u8,
-    }
-
-    impl OriginalImplForTest {
-        fn true_count(&self) -> u32 {
-            return self.counts[1] as u32;
-        }
-        fn false_count(&self) -> u32 {
-            return self.counts[0] as u32;
-        }
-
-        fn record_obs_and_update(&mut self, obs: bool) {
-            let fcount = self.counts[0] as u32;
-            let tcount = self.counts[1] as u32;
-
-            let overflow = self.counts[obs as usize] == 0xff;
-
-            if overflow {
-                // check less than 512
-                let neverseen = self.counts[!obs as usize] == 1;
-                if neverseen {
-                    self.counts[obs as usize] = 0xff;
-                    self.probability = if obs { 0 } else { 255 };
-                } else {
-                    self.counts[0] = ((1 + fcount) >> 1) as u8;
-                    self.counts[1] = ((1 + tcount) >> 1) as u8;
-                    self.counts[obs as usize] = 129;
-                    self.probability = self.optimize(self.counts[0] as u32 + self.counts[1] as u32);
-                }
-            } else {
-                self.counts[obs as usize] += 1;
-                self.probability = self.optimize(fcount + tcount + 1);
-            }
-        }
-
-        fn optimize(&self, sum: u32) -> u8 {
-            let prob = (self.false_count() << 8) / sum;
-
-            prob as u8
-        }
-    }
-
-    for i in 0u16..=65535 {
-        let mut old_f = OriginalImplForTest {
-            counts: [(i >> 8) as u8, i as u8],
-            probability: 0,
-        };
-
-        if old_f.true_count() == 0 || old_f.false_count() == 0 {
-            // starting counts can't be zero (we use 0 as an internal special value for the new implementation for the edge case of many trues in a row)
-            continue;
-        }
-
-        let mut new_f = VP8Context { counts: i as u16 };
-
-        for _k in 0..10 {
-            old_f.record_obs_and_update(false);
-            new_f.record_and_update_false_obs();
-            assert_eq!(old_f.probability, new_f.get_probability());
-        }
-
-        let mut old_t = OriginalImplForTest {
-            counts: [(i >> 8) as u8, i as u8],
-            probability: 0,
-        };
-        let mut new_t = VP8Context { counts: i as u16 };
-
-        for _k in 0..10 {
-            old_t.record_obs_and_update(true);
-            new_t.record_and_update_true_obs();
-
-            assert_eq!(old_t.probability, new_t.get_probability());
         }
     }
 }
@@ -193,26 +124,28 @@ pub struct VP8Reader<R> {
 }
 
 impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
+    /// reads a single 1 or 0 from the bitstream using the probability of the supplied context
     fn get(&mut self, branch: &mut VP8Context) -> Result<bool> {
         let mut bits_needed = self.bits_needed;
         let mut big_value = self.big_value;
         let mut range = self.range;
 
+        // if we don't have enough bits in the buffer, then we read another byte
         if bits_needed > 0 {
             Self::vpx_reader_fill(&mut self.reader, &mut big_value, &mut bits_needed)?;
         }
 
+        // we split the range into two parts, one for true and one for false using the probability to determine the split point
         let split = (((range - 1) * (branch.get_probability() as u32)) >> 8) + 1;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
 
-        let r = big_value.overflowing_sub(big_split);
+        // if the value is less than the split, then we know the symbol is false, otherwise it is true
+        let (result, overflow) = big_value.overflowing_sub(big_split);
 
-        if r.1 {
+        if overflow {
             branch.record_and_update_false_obs();
             range = split;
 
-            //lookup tables are best avoided in modern CPUs
-            //let shift = VPX_NORM[self.range as usize] as i32;
             let shift = split.leading_zeros() as i32 - 24;
 
             self.big_value = big_value << shift;
@@ -223,10 +156,8 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
         } else {
             branch.record_and_update_true_obs();
             range = range - split;
-            big_value = r.0;
+            big_value = result;
 
-            //lookup tables are best avoided in modern CPUs
-            //let shift = VPX_NORM[self.range as usize] as i32;
             let shift = range.leading_zeros() as i32 - 24;
 
             self.big_value = big_value << shift;
@@ -237,6 +168,9 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
         }
     }
 
+    /// reads a single 1 or 0 from the bitstream using a fixed probabilty of 0.5
+    /// this results in a faster logic for bits where the probability is close to 0.5 and
+    /// compression is not worthwhile.
     fn get_bypass(&mut self) -> Result<bool> {
         let mut bits_needed = self.bits_needed;
         let mut value = self.big_value;
@@ -249,14 +183,14 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
         let split = range >> 1;
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
 
-        let r = value.overflowing_sub(big_split);
-        if r.1 {
+        let (result, overflow) = value.overflowing_sub(big_split);
+        if overflow {
             self.big_value = value << 1;
             self.bits_needed = bits_needed + 1;
 
             Ok(false)
         } else {
-            self.big_value = r.0 << 1;
+            self.big_value = result << 1;
             self.bits_needed = bits_needed + 1;
 
             Ok(true)
@@ -434,5 +368,87 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         }
 
         Ok(())
+    }
+}
+
+/// run through all the possible combinations of counts and ensure that the probability is the same
+#[test]
+fn test_all_probabilities() {
+    /// This is copied from the C++ implementation to ensure that the behavior is the same
+    struct OriginalImplForTest {
+        counts: [u8; 2],
+        probability: u8,
+    }
+
+    impl OriginalImplForTest {
+        fn true_count(&self) -> u32 {
+            return self.counts[1] as u32;
+        }
+        fn false_count(&self) -> u32 {
+            return self.counts[0] as u32;
+        }
+
+        fn record_obs_and_update(&mut self, obs: bool) {
+            let fcount = self.counts[0] as u32;
+            let tcount = self.counts[1] as u32;
+
+            let overflow = self.counts[obs as usize] == 0xff;
+
+            if overflow {
+                // check less than 512
+                let neverseen = self.counts[!obs as usize] == 1;
+                if neverseen {
+                    self.counts[obs as usize] = 0xff;
+                    self.probability = if obs { 0 } else { 255 };
+                } else {
+                    self.counts[0] = ((1 + fcount) >> 1) as u8;
+                    self.counts[1] = ((1 + tcount) >> 1) as u8;
+                    self.counts[obs as usize] = 129;
+                    self.probability = self.optimize(self.counts[0] as u32 + self.counts[1] as u32);
+                }
+            } else {
+                self.counts[obs as usize] += 1;
+                self.probability = self.optimize(fcount + tcount + 1);
+            }
+        }
+
+        fn optimize(&self, sum: u32) -> u8 {
+            let prob = (self.false_count() << 8) / sum;
+
+            prob as u8
+        }
+    }
+
+    for i in 0u16..=65535 {
+        let mut old_f = OriginalImplForTest {
+            counts: [(i >> 8) as u8, i as u8],
+            probability: 0,
+        };
+
+        if old_f.true_count() == 0 || old_f.false_count() == 0 {
+            // starting counts can't be zero (we use 0 as an internal special value for the new implementation for the edge case of many trues in a row)
+            continue;
+        }
+
+        let mut new_f = VP8Context { counts: i as u16 };
+
+        for _k in 0..10 {
+            old_f.record_obs_and_update(false);
+            new_f.record_and_update_false_obs();
+            assert_eq!(old_f.probability, new_f.get_probability());
+        }
+
+        let mut old_t = OriginalImplForTest {
+            counts: [(i >> 8) as u8, i as u8],
+            probability: 0,
+        };
+        let mut new_t = VP8Context { counts: i as u16 };
+
+        for _k in 0..10 {
+            old_t.record_obs_and_update(true);
+            new_t.record_and_update_true_obs();
+
+            assert_eq!(old_t.probability, new_t.get_probability());
+        }
     }
 }
