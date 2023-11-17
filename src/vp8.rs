@@ -78,15 +78,14 @@ impl VP8Context {
             // non-overflow case is easy
             self.counts += 1;
         } else {
-            // if we would have overflowed, then we renormalize by dividing everything by 2 (rounding up),
-            // except in the case where we've only seen true (false count = 1), in which case we keep the probability at 0.
-            // In order to slightly improve the compression for large runs of true, we keep an extra state of 0x00ff (which is normally illegal)
-            // to represent the case where we've only seen true, and we keep the probability at 0.
-
+            // special case where it is all trues
             if self.counts <= 0x01ff {
+                // corner case since the original implementation
+                // insists on setting the probabily to zero,
+                // although the probability calculation would
+                // return 1.
                 self.counts = 0x00ff;
             } else {
-                // if we would have overflowed, then we renormalize by dividing everything by 2 (rounding up)
                 self.counts = (((self.counts as u32 + 0x100) >> 1) & 0xff00) as u16 | 129;
             }
         }
@@ -95,19 +94,17 @@ impl VP8Context {
     /// called to adjust the probability in the context when the observed symbol zero true
     #[inline(always)]
     pub fn record_and_update_false_obs(&mut self) {
+        if self.counts == 0x00ff {
+            // handle corner case where prob was set to zero (purely for compatibility, remove this if there is a breaking change in the format)
+            self.counts = 0x02ff;
+            return;
+        }
+
         let (result, overflow) = self.counts.overflowing_add(0x100);
         if !overflow {
-            if self.counts == 0x00ff {
-                // for backwards compatibility to the C++ implementation, we jump from 0x00ff to 0x02ff although
-                // this is unnecessary for correctness and could remove this if backwards compatibility is not needed
-                self.counts = 0x02ff;
-            } else {
-                self.counts = result;
-            }
+            self.counts = result;
         } else {
-            // if we would have overflowed, then we renormalize by dividing everything by 2 (rounding up),
-            // except in the case where we've only seen false (true count = 1), in which case we keep the probability at 255
-            // which slighly improves the compression ratio
+            // special case where it is all falses
             if self.counts != 0xff01 {
                 self.counts = ((1 + (self.counts & 0xff) as u32) >> 1) as u16 | 0x8100;
             }
@@ -115,121 +112,144 @@ impl VP8Context {
     }
 }
 
-/// decoder from VP8/WebM
 pub struct VP8Reader<R> {
-    big_value: u64,
+    value: u64,
     range: u32,
-    bits_needed: i32,
-    reader: R,
+    count: i32,
+    upstream_reader: R,
 }
 
 impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
-    /// reads a single 1 or 0 from the bitstream using the probability of the supplied context
+    #[inline(always)]
     fn get(&mut self, branch: &mut VP8Context) -> Result<bool> {
-        let mut bits_needed = self.bits_needed;
-        let mut big_value = self.big_value;
-        let mut range = self.range;
+        let mut tmp_value = self.value;
+        let mut tmp_range = self.range;
+        let mut tmp_count = self.count;
 
-        // if we don't have enough bits in the buffer, then we read another byte
-        if bits_needed > 0 {
-            Self::vpx_reader_fill(&mut self.reader, &mut big_value, &mut bits_needed)?;
+        if tmp_count < 0 {
+            Self::vpx_reader_fill(&mut tmp_value, &mut tmp_count, &mut self.upstream_reader)?;
         }
 
-        // we split the range into two parts, one for true and one for false using the probability to determine the split point
-        let split = (((range - 1) * (branch.get_probability() as u32)) >> 8) + 1;
+        let probability = branch.get_probability() as u32;
+
+        let split = 1 + (((tmp_range - 1) * probability) >> BITS_IN_BYTE);
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
+        let bit = tmp_value >= big_split;
 
-        // if the value is less than the split, then we know the symbol is false, otherwise it is true
-        let (result, overflow) = big_value.overflowing_sub(big_split);
-
-        if overflow {
-            branch.record_and_update_false_obs();
-            range = split;
-
-            let shift = split.leading_zeros() as i32 - 24;
-
-            self.big_value = big_value << shift;
-            self.bits_needed = bits_needed + shift;
-            self.range = range << shift;
-
-            return Ok(false);
-        } else {
+        let shift;
+        if bit {
             branch.record_and_update_true_obs();
-            range = range - split;
-            big_value = result;
+            tmp_range -= split;
+            tmp_value -= big_split;
 
-            let shift = range.leading_zeros() as i32 - 24;
+            // so optimizer understands that 0 should never happen and uses a cold jump
+            // if we don't have LZCNT on x86 CPUs (older BSR instruction requires check for zero).
+            // This is better since the branch prediction figures quickly this never happens and can run
+            // the code sequentially.
+            #[cfg(all(
+                not(target_feature = "lzcnt"),
+                any(target_arch = "x86", target_arch = "x86_64")
+            ))]
+            assert!(tmp_range > 0);
 
-            self.big_value = big_value << shift;
-            self.bits_needed = bits_needed + shift;
-            self.range = range << shift;
+            shift = tmp_range.leading_zeros() as i32 - 24;
+        } else {
+            branch.record_and_update_false_obs();
+            tmp_range = split;
 
-            return Ok(true);
+            // optimizer understands that split > 0
+            shift = split.leading_zeros() as i32 - 24;
         }
+
+        self.value = tmp_value << shift;
+        self.range = tmp_range << shift;
+        self.count = tmp_count - shift;
+        return Ok(bit);
     }
 
-    /// reads a single 1 or 0 from the bitstream using a fixed probabilty of 0.5
-    /// this results in a faster logic for bits where the probability is close to 0.5 and
-    /// compression is not worthwhile.
+    #[inline(always)]
     fn get_bypass(&mut self) -> Result<bool> {
-        let mut bits_needed = self.bits_needed;
-        let mut value = self.big_value;
-        let range = self.range;
+        let mut tmp_value = self.value;
+        let mut tmp_range = self.range;
+        let mut tmp_count = self.count;
 
-        if bits_needed > 0 {
-            Self::vpx_reader_fill(&mut self.reader, &mut value, &mut bits_needed)?;
+        if tmp_count < 0 {
+            Self::vpx_reader_fill(&mut tmp_value, &mut tmp_count, &mut self.upstream_reader)?;
         }
 
-        let split = range >> 1;
+        let probability = 129;
+
+        let split = 1 + (((tmp_range - 1) * probability) >> BITS_IN_BYTE);
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
+        let bit = tmp_value >= big_split;
 
-        let (result, overflow) = value.overflowing_sub(big_split);
-        if overflow {
-            self.big_value = value << 1;
-            self.bits_needed = bits_needed + 1;
+        let shift;
+        if bit {
+            tmp_range -= split;
+            tmp_value -= big_split;
 
-            Ok(false)
+            // so optimizer understands that 0 should never happen and uses a cold jump
+            // if we don't have LZCNT on x86 CPUs (older BSR instruction requires check for zero).
+            // This is better since the branch prediction figures quickly this never happens and can run
+            // the code sequentially.
+            #[cfg(all(
+                not(target_feature = "lzcnt"),
+                any(target_arch = "x86", target_arch = "x86_64")
+            ))]
+            assert!(tmp_range > 0);
+
+            shift = tmp_range.leading_zeros() as i32 - 24;
         } else {
-            self.big_value = result << 1;
-            self.bits_needed = bits_needed + 1;
+            tmp_range = split;
 
-            Ok(true)
+            // optimizer understands that split > 0
+            shift = split.leading_zeros() as i32 - 24;
         }
+
+        self.value = tmp_value << shift;
+        self.range = tmp_range << shift;
+        self.count = tmp_count - shift;
+        return Ok(bit);
     }
 }
 
 impl<R: Read> VP8Reader<R> {
     pub fn new(reader: R) -> Result<Self> {
         let mut r = VP8Reader {
-            reader,
-            big_value: 0,
-            bits_needed: 8,
+            upstream_reader: reader,
+            value: 0,
+            count: -8,
             range: 255,
         };
 
-        Self::vpx_reader_fill(&mut r.reader, &mut r.big_value, &mut r.bits_needed)?;
+        Self::vpx_reader_fill(&mut r.value, &mut r.count, &mut r.upstream_reader)?;
 
-        let mut dummy_branch = VP8Context::default();
+        let mut dummy_branch = VP8Context::new();
         r.get(&mut dummy_branch)?; // marker bit
 
         return Ok(r);
     }
 
+    #[cold]
     #[inline(always)]
-    fn vpx_reader_fill(reader: &mut R, value: &mut u64, bits_needed: &mut i32) -> Result<()> {
-        let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE + *bits_needed - BITS_IN_BYTE;
+    fn vpx_reader_fill(
+        tmp_value: &mut u64,
+        tmp_count: &mut i32,
+        upstream_reader: &mut R,
+    ) -> Result<()> {
+        let mut shift = BITS_IN_LONG_MINUS_LAST_BYTE - (*tmp_count + BITS_IN_BYTE);
 
         while shift >= 0 {
             // BufReader is already pretty efficient handling small reads, so optimization doesn't help that much
             let mut v = [0u8; 1];
-            let bytes_read = reader.read(&mut v[..])?;
+            let bytes_read = upstream_reader.read(&mut v)?;
             if bytes_read == 0 {
                 break;
             }
 
-            *value |= (v[0] as u64) << shift;
+            *tmp_value |= (v[0] as u64) << shift;
             shift -= BITS_IN_BYTE;
-            *bits_needed -= BITS_IN_BYTE;
+            *tmp_count += BITS_IN_BYTE;
         }
 
         return Ok(());
@@ -277,9 +297,10 @@ impl<W: Write> VP8Writer<W> {
         Ok(())
     }
 
-    fn send_to_output(&mut self, shift: i32) -> Result<()> {
-        let offset = shift - self.bits_left;
-        if ((self.low_value << (offset - 1)) & 0x80000000) != 0 {
+    fn send_to_output(&mut self, shift: &mut i32, tmp_count: &mut i32, tmp_low_value: &mut u32) {
+        let offset = *shift - *tmp_count;
+
+        if ((*tmp_low_value << (offset - 1)) & 0x80000000) != 0 {
             let mut x = self.buffer.len() - 1;
 
             while self.buffer[x] == 0xFF {
@@ -291,17 +312,12 @@ impl<W: Write> VP8Writer<W> {
 
             self.buffer[x] += 1;
         }
-        self.buffer.push((self.low_value >> (24 - offset)) as u8);
-        self.low_value <<= offset;
-        self.low_value &= 0xffffff;
-        self.low_value <<= self.bits_left;
-        self.bits_left -= 8;
 
-        if self.buffer.len() > 65536 - 128 {
-            self.flush_non_final_data()?;
-        }
-
-        Ok(())
+        self.buffer.push((*tmp_low_value >> (24 - offset)) as u8);
+        *tmp_low_value <<= offset;
+        *shift = *tmp_count;
+        *tmp_low_value &= 0xffffff;
+        *tmp_count -= 8;
     }
 }
 
@@ -309,29 +325,88 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
     fn put(&mut self, value: bool, branch: &mut VP8Context) -> Result<()> {
         let probability = branch.get_probability() as u32;
 
-        let split = 1 + (((self.range - 1) * probability) >> 8);
+        let mut tmp_range = self.range;
+        let split = 1 + (((tmp_range - 1) * probability) >> 8);
 
+        let mut tmp_low_value = self.low_value;
+
+        let mut shift;
         if value {
             branch.record_and_update_true_obs();
-            self.low_value += split;
-            self.range -= split;
+            tmp_low_value += split;
+            tmp_range -= split;
+
+            shift = (tmp_range as u8).leading_zeros() as i32;
         } else {
             branch.record_and_update_false_obs();
-            self.range = split;
+            tmp_range = split;
+
+            // optimizer understands that split > 0, so it can optimize this
+            shift = (split as u8).leading_zeros() as i32;
         }
 
-        //lookup tables are best avoided in modern CPUs
-        //let mut shift = VPX_NORM[self.range as usize] as i32;
-        let shift = self.range.leading_zeros() as i32 - 24;
+        tmp_range <<= shift;
 
-        self.range <<= shift;
+        let mut tmp_count = self.bits_left;
+        tmp_count += shift;
 
-        self.bits_left += shift;
+        if tmp_count >= 0 {
+            self.send_to_output(&mut shift, &mut tmp_count, &mut tmp_low_value);
+        }
 
-        if self.bits_left >= 0 {
-            self.send_to_output(shift)?;
+        tmp_low_value <<= shift;
+
+        self.bits_left = tmp_count;
+        self.low_value = tmp_low_value;
+        self.range = tmp_range;
+
+        // check if we're out of buffer space, if yes - send the buffer to output,
+        if self.buffer.len() > 65536 - 128 {
+            self.flush_non_final_data()?;
+        }
+
+        Ok(())
+    }
+
+    fn put_bypass(&mut self, value: bool) -> Result<()> {
+        let probability = 129;
+
+        let mut tmp_range = self.range;
+        let split = 1 + (((tmp_range - 1) * probability) >> 8);
+
+        let mut tmp_low_value = self.low_value;
+
+        let mut shift;
+        if value {
+            tmp_low_value += split;
+            tmp_range -= split;
+
+            shift = (tmp_range as u8).leading_zeros() as i32;
         } else {
-            self.low_value <<= shift;
+            tmp_range = split;
+
+            // optimizer understands that split > 0, so it can optimize this
+            shift = (split as u8).leading_zeros() as i32;
+        }
+
+        tmp_range <<= shift;
+
+        let mut tmp_count = self.bits_left;
+        tmp_count += shift;
+
+        if tmp_count >= 0 {
+            self.send_to_output(&mut shift, &mut tmp_count, &mut tmp_low_value);
+        }
+
+        tmp_low_value <<= shift;
+
+        self.bits_left = tmp_count;
+        self.low_value = tmp_low_value;
+        self.range = tmp_range;
+
+        // check if we're out of buffer space, if yes - send the buffer to output,
+        if self.buffer.len() > 65536 - 128 {
+            self.flush_non_final_data()?;
         }
 
         Ok(())
@@ -352,22 +427,37 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
 
         Ok(())
     }
+}
 
-    fn put_bypass(&mut self, value: bool) -> Result<()> {
-        let split = self.range >> 1;
-        if value {
-            self.low_value += split;
-        }
+#[test]
+fn test_all_contexts() {
+    use std::io::Cursor;
 
-        self.bits_left += 1;
+    let mut contexts = Vec::new();
+    for i in 0..=65535 {
+        contexts.push(VP8Context { counts: i });
+    }
 
-        if self.bits_left >= 0 {
-            self.send_to_output(1)?;
-        } else {
-            self.low_value <<= 1;
-        }
+    let mut buffer: Vec<_> = Vec::new();
+    let mut writer = VP8Writer::new(&mut buffer).unwrap();
+    for i in 0..=65535 {
+        writer.put(true, &mut contexts[i]).unwrap();
+        writer.put(false, &mut contexts[i]).unwrap();
+        writer.put_bypass(true).unwrap();
+        writer.put_bypass(false).unwrap();
+    }
+    writer.finish().unwrap();
 
-        Ok(())
+    for i in 0..=65535 {
+        contexts[i] = VP8Context { counts: i as u16 };
+    }
+
+    let mut reader = VP8Reader::new(Cursor::new(&buffer[..])).unwrap();
+    for i in 0..=65535 {
+        assert_eq!(reader.get(&mut contexts[i]).unwrap(), true, "i = {}", i);
+        assert_eq!(reader.get(&mut contexts[i]).unwrap(), false, "i = {}", i);
+        assert_eq!(reader.get_bypass().unwrap(), true, "i = {}", i);
+        assert_eq!(reader.get_bypass().unwrap(), false, "i = {}", i);
     }
 }
 
