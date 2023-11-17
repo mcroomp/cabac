@@ -177,9 +177,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             Self::vpx_reader_fill(&mut tmp_value, &mut tmp_count, &mut self.upstream_reader)?;
         }
 
-        let probability = 129;
-
-        let split = 1 + (((tmp_range - 1) * probability) >> BITS_IN_BYTE);
+        let split = 1 + (tmp_range >> 1);
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
         let bit = tmp_value >= big_split;
 
@@ -297,7 +295,13 @@ impl<W: Write> VP8Writer<W> {
         Ok(())
     }
 
-    fn send_to_output(&mut self, shift: &mut i32, tmp_count: &mut i32, tmp_low_value: &mut u32) {
+    #[inline(always)]
+    fn send_to_output(
+        &mut self,
+        shift: &mut i32,
+        tmp_count: &mut i32,
+        tmp_low_value: &mut u32,
+    ) -> Result<()> {
         let offset = *shift - *tmp_count;
 
         if ((*tmp_low_value << (offset - 1)) & 0x80000000) != 0 {
@@ -314,14 +318,23 @@ impl<W: Write> VP8Writer<W> {
         }
 
         self.buffer.push((*tmp_low_value >> (24 - offset)) as u8);
+
         *tmp_low_value <<= offset;
         *shift = *tmp_count;
         *tmp_low_value &= 0xffffff;
         *tmp_count -= 8;
+
+        // check if we're out of buffer space, if yes - send the buffer to output,
+        if self.buffer.len() > 65536 - 128 {
+            self.flush_non_final_data()?;
+        }
+
+        Ok(())
     }
 }
 
 impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
+    #[inline(always)]
     fn put(&mut self, value: bool, branch: &mut VP8Context) -> Result<()> {
         let probability = branch.get_probability() as u32;
 
@@ -351,7 +364,7 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         tmp_count += shift;
 
         if tmp_count >= 0 {
-            self.send_to_output(&mut shift, &mut tmp_count, &mut tmp_low_value);
+            self.send_to_output(&mut shift, &mut tmp_count, &mut tmp_low_value)?;
         }
 
         tmp_low_value <<= shift;
@@ -360,19 +373,13 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         self.low_value = tmp_low_value;
         self.range = tmp_range;
 
-        // check if we're out of buffer space, if yes - send the buffer to output,
-        if self.buffer.len() > 65536 - 128 {
-            self.flush_non_final_data()?;
-        }
-
         Ok(())
     }
 
+    #[inline(always)]
     fn put_bypass(&mut self, value: bool) -> Result<()> {
-        let probability = 129;
-
         let mut tmp_range = self.range;
-        let split = 1 + (((tmp_range - 1) * probability) >> 8);
+        let split = 1 + (tmp_range >> 1);
 
         let mut tmp_low_value = self.low_value;
 
@@ -395,7 +402,7 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         tmp_count += shift;
 
         if tmp_count >= 0 {
-            self.send_to_output(&mut shift, &mut tmp_count, &mut tmp_low_value);
+            self.send_to_output(&mut shift, &mut tmp_count, &mut tmp_low_value)?;
         }
 
         tmp_low_value <<= shift;
@@ -403,11 +410,6 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         self.bits_left = tmp_count;
         self.low_value = tmp_low_value;
         self.range = tmp_range;
-
-        // check if we're out of buffer space, if yes - send the buffer to output,
-        if self.buffer.len() > 65536 - 128 {
-            self.flush_non_final_data()?;
-        }
 
         Ok(())
     }
