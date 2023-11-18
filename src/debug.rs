@@ -9,12 +9,12 @@ use crate::traits::{CabacReader, CabacWriter};
 
 // we make sure that every context has a different value so that we can detect when we've made
 // a mistake and are using the wrong context
+#[derive(Clone, Copy)]
 pub struct DebugContext {
     value: u32,
 }
 
 impl Default for DebugContext {
-    /// default value is balanced between zeros or ones
     fn default() -> Self {
         DebugContext { value: 0 }
     }
@@ -101,33 +101,29 @@ impl<W: Write> CabacWriter<DebugContext> for DebugWriter<W> {
 #[test]
 fn roundtrip_value() {
     let mut output = Vec::with_capacity(1000);
-    {
-        let mut writer = DebugWriter::new(&mut output).unwrap();
-        let mut context = [
-            DebugContext::default(),
-            DebugContext::default(),
-            DebugContext::default(),
-            DebugContext::default(),
-        ];
-        for i in 0..100 {
-            writer.put(i & 1 == 1, &mut context[i % 4]).unwrap();
-            writer.put_bypass(i & 1 == 1).unwrap();
-        }
+    let mut writer = DebugWriter::new(&mut output).unwrap();
+    let mut context = [DebugContext::default(); 8];
+    let mut context_branch = [[DebugContext::default(); 128]; 8];
 
-        writer.finish().unwrap();
+    for i in 0..100 {
+        writer.put(i & 1 == 1, &mut context[i % 4]).unwrap();
+        writer.put_bypass(i & 1 == 1).unwrap();
+        writer.put_n_bits(0x456, 24, &mut context).unwrap();
+        writer.put_unary_encoded(i, &mut context).unwrap();
+        writer.put_branched(i as u8, &mut context_branch).unwrap();
     }
 
-    {
-        let mut reader = DebugReader::new(&output[..]).unwrap();
-        let mut context = [
-            DebugContext::default(),
-            DebugContext::default(),
-            DebugContext::default(),
-            DebugContext::default(),
-        ];
-        for i in 0..100 {
-            assert_eq!(reader.get(&mut context[i % 4]).unwrap(), i & 1 == 1);
-            assert_eq!(reader.get_bypass().unwrap(), i & 1 == 1);
-        }
+    writer.finish().unwrap();
+
+    let mut reader = DebugReader::new(&output[..]).unwrap();
+    context.fill(DebugContext::default());
+    context_branch.fill([DebugContext::default(); 128]);
+
+    for i in 0..100 {
+        assert_eq!(reader.get(&mut context[i % 4]).unwrap(), i & 1 == 1);
+        assert_eq!(reader.get_bypass().unwrap(), i & 1 == 1);
+        assert_eq!(reader.get_n_bits(24, &mut context).unwrap(), 0x456);
+        assert_eq!(reader.get_unary_encoded(&mut context).unwrap(), i);
+        assert_eq!(reader.get_branched(&mut context_branch).unwrap(), i as u8);
     }
 }
