@@ -74,37 +74,26 @@ impl VP8Context {
     /// called to adjust the probability in the context when the observed symbol zero true
     #[inline(always)]
     pub fn record_and_update_true_obs(&mut self) {
-        if (self.counts & 0xff) != 0xff {
+        let c = u32::from(self.counts) + 1;
+        if c & 0xff != 0 {
             // non-overflow case is easy
-            self.counts += 1;
+            self.counts = c as u16;
         } else {
-            // special case where it is all trues
-            if self.counts <= 0x01ff {
-                // corner case since the original implementation
-                // insists on setting the probabily to zero,
-                // although the probability calculation would
-                // return 1.
-                self.counts = 0x00ff;
-            } else {
-                self.counts = (((self.counts as u32 + 0x100) >> 1) & 0xff00) as u16 | 129;
+            // normalize, except special case where it is all trues
+            if c & !0x0200 != 0 {
+                self.counts = ((c >> 1) | 129) as u16;
             }
         }
     }
 
-    /// called to adjust the probability in the context when the observed symbol zero true
+    /// called to adjust the probability in the context when the observed symbol zero false
     #[inline(always)]
     pub fn record_and_update_false_obs(&mut self) {
-        if self.counts == 0x00ff {
-            // handle corner case where prob was set to zero (purely for compatibility, remove this if there is a breaking change in the format)
-            self.counts = 0x02ff;
-            return;
-        }
-
         let (result, overflow) = self.counts.overflowing_add(0x100);
         if !overflow {
             self.counts = result;
         } else {
-            // special case where it is all falses
+            // normalize, except in special case where it is all falses
             if self.counts != 0xff01 {
                 self.counts = ((1 + (self.counts & 0xff) as u32) >> 1) as u16 | 0x8100;
             }

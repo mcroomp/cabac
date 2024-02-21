@@ -6,8 +6,61 @@ use cabac::traits::{CabacReader, CabacWriter};
 use cabac::vp8::{VP8Reader, VP8Writer};
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 
+const fn gen_pattern() -> [bool; 1024] {
+    let mut pattern = [false; 1024];
+    let mut i = 0;
+    while i < 100 {
+        pattern[i] = false;
+        i += 1;
+    }
+    while i < 200 {
+        pattern[i] = true;
+        i += 1;
+    }
+    while i < 300 {
+        pattern[i] = i % 2 == 0;
+        i += 1;
+    }
+    while i < 400 {
+        pattern[i] = i % 10 == 0;
+        i += 1;
+    }
+    while i < 400 {
+        pattern[i] = i % 30 == 0;
+        i += 1;
+    }
+    while i < 500 {
+        pattern[i] = i % 30 != 0;
+        i += 1;
+    }
+    while i < 600 {
+        pattern[i] = i % 10 != 0;
+        i += 1;
+    }
+    while i < 700 {
+        pattern[i] = i % 5 != 0;
+        i += 1;
+    }
+    while i < 800 {
+        pattern[i] = i % 6 != 0;
+        i += 1;
+    }
+    while i < 900 {
+        pattern[i] = i % 9 == 0;
+        i += 1;
+    }
+    while i < 1024 {
+        pattern[i] = i % 2 == 0;
+        i += 1;
+    }
+
+    pattern
+}
+
+const BOOL_PATTERN: [bool; 1024] = gen_pattern();
+
 fn pattern(i: i32) -> bool {
-    i % 3 == 0
+    BOOL_PATTERN[(i & 1023) as usize]
 }
 
 fn alternating_get_init<CONTEXT: Default, CW: CabacWriter<CONTEXT>>(writer: &mut CW) {
