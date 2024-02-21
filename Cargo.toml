@@ -1,6 +1,6 @@
 [package]
 name = "cabac"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 
 description = "Context-adaptive binary arithmetic coding library"
@@ -15,10 +15,10 @@ exclude = [ "tests/*" ]
 debug=true
 
 [dependencies]
-byteorder = "1.4.3"
+byteorder = "1.4"
 
 [dev-dependencies]
-criterion = "0.5.1"
+criterion = "0.5"
 
 [lib]
 
