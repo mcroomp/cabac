@@ -249,7 +249,7 @@ pub struct VP8Writer<W> {
     writer: W,
     buffer: Vec<u8>,
     num_ff_bytes: u32,
-    buffered_byte: u32,
+    buffered_byte: Option<u8>,
 }
 
 impl<W: Write> VP8Writer<W> {
@@ -261,7 +261,7 @@ impl<W: Write> VP8Writer<W> {
             buffer: Vec::new(),
             writer: writer,
             num_ff_bytes: 0,
-            buffered_byte: 0xff,
+            buffered_byte: None,
         };
 
         let mut dummy_branch = VP8Context::default();
@@ -291,6 +291,8 @@ impl<W: Write> VP8Writer<W> {
         let last_byte = *tmp_low_value >> (24 - offset);
 
         if (last_byte & 0x100) != 0 {
+            assert_eq!(*self.buffer.last().unwrap(), self.buffered_byte.unwrap());
+
             *self.buffer.last_mut().unwrap() += 1;
             while self.num_ff_bytes > 0 {
                 self.buffer.push(0);
@@ -302,12 +304,14 @@ impl<W: Write> VP8Writer<W> {
 
         if last_byte == 0xff {
             self.num_ff_bytes += 1;
+            assert!(self.buffered_byte.is_some());
         } else {
             while self.num_ff_bytes > 0 {
                 self.buffer.push(0xff);
                 self.num_ff_bytes -= 1;
             }
             self.buffer.push(last_byte);
+            self.buffered_byte = Some(last_byte);
         }
 
         *tmp_low_value <<= offset;
