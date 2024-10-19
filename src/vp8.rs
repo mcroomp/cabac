@@ -249,8 +249,8 @@ pub struct VP8Writer<W> {
     range: u32,
     bits_left: i32,
     writer: W,
-    num_ff_bytes: u32,
-    buffered_byte: Option<u8>,
+    num_buffered_bytes: u32,
+    buffered_byte: u8,
 }
 
 impl<W: Write> VP8Writer<W> {
@@ -260,8 +260,8 @@ impl<W: Write> VP8Writer<W> {
             range: 255,
             bits_left: -24,
             writer: writer,
-            num_ff_bytes: 0,
-            buffered_byte: None,
+            num_buffered_bytes: 0,
+            buffered_byte: 0,
         };
 
         let mut dummy_branch = VP8Context::default();
@@ -282,30 +282,18 @@ impl<W: Write> VP8Writer<W> {
         let last_byte = *tmp_low_value >> (24 - offset);
 
         if (last_byte & 0x100) != 0 {
-            self.writer
-                .write_u8(self.buffered_byte.take().unwrap() + 1)?;
-
-            while self.num_ff_bytes > 0 {
-                self.writer.write_u8(0)?;
-                self.num_ff_bytes -= 1;
-            }
+            self.flush_buffered_bytes(1)?;
         }
 
         let last_byte = last_byte as u8;
 
         if last_byte == 0xff {
-            self.num_ff_bytes += 1;
-            assert!(self.buffered_byte.is_some());
+            self.num_buffered_bytes += 1;
         } else {
-            if let Some(x) = self.buffered_byte.take() {
-                self.writer.write_u8(x)?;
-            }
+            self.flush_buffered_bytes(0)?;
 
-            while self.num_ff_bytes > 0 {
-                self.writer.write_u8(0xff)?;
-                self.num_ff_bytes -= 1;
-            }
-            self.buffered_byte = Some(last_byte);
+            self.buffered_byte = last_byte;
+            self.num_buffered_bytes = 1;
         }
 
         *tmp_low_value <<= offset;
@@ -313,6 +301,20 @@ impl<W: Write> VP8Writer<W> {
         *tmp_low_value &= 0xffffff;
         *tmp_count -= 8;
 
+        Ok(())
+    }
+
+    fn flush_buffered_bytes(&mut self, carry: u8) -> Result<()> {
+        if self.num_buffered_bytes > 0 {
+            self.writer
+                .write_u8(self.buffered_byte.wrapping_add(carry))?;
+            self.num_buffered_bytes -= 1;
+
+            while self.num_buffered_bytes > 0 {
+                self.writer.write_u8(0xffu8.wrapping_add(carry))?;
+                self.num_buffered_bytes -= 1;
+            }
+        }
         Ok(())
     }
 }
@@ -398,19 +400,13 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
     }
 
     fn finish(&mut self) -> Result<()> {
-        for _i in 0..32 {
-            let mut dummy_branch = VP8Context::default();
-            self.put(false, &mut dummy_branch)?;
+        // pad the rest of the stream so we don't have to
+        // worry about carrying the last byte
+        while self.low_value > 0 {
+            self.put_bypass(false)?;
         }
 
-        if let Some(x) = self.buffered_byte.take() {
-            self.writer.write_u8(x)?;
-        }
-
-        while self.num_ff_bytes > 0 {
-            self.writer.write_u8(0xff)?;
-            self.num_ff_bytes -= 1;
-        }
+        self.flush_buffered_bytes(0)?;
 
         Ok(())
     }
