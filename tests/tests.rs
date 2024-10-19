@@ -83,21 +83,25 @@ fn test_permutation_vp8(pattern: u64, num_bits: u8, bypass_index: u8) {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Seq {
-    Normal(bool),
+    Normal(bool, usize),
     Bypass(bool),
 }
 
 fn test_seq_vp8(seq: &[Seq]) {
     let mut output = Vec::new();
     {
-        let mut context = VP8Context::default();
+        let mut context = Vec::new();
+        for _i in 0..16 {
+            context.push(VP8Context::default());
+        }
         let mut writer = VP8Writer::new(&mut output).unwrap();
 
-        for s in seq {
+        for &s in seq {
             match s {
-                Seq::Normal(b) => writer.put(*b, &mut context).unwrap(),
-                Seq::Bypass(b) => writer.put_bypass(*b).unwrap(),
+                Seq::Normal(b, c) => writer.put(b, &mut context[c]).unwrap(),
+                Seq::Bypass(b) => writer.put_bypass(b).unwrap(),
             }
         }
 
@@ -106,16 +110,20 @@ fn test_seq_vp8(seq: &[Seq]) {
 
     // now try reading it
     {
-        let mut context = VP8Context::default();
+        let mut context = Vec::new();
+        for _ in 0..16 {
+            context.push(VP8Context::default());
+        }
+
         let mut reader = VP8Reader::new(Cursor::new(&output)).unwrap();
 
-        for s in seq {
+        for &s in seq {
             match s {
-                Seq::Normal(b) => {
-                    assert_eq!(*b, reader.get(&mut context).unwrap())
+                Seq::Normal(b, c) => {
+                    assert_eq!(b, reader.get(&mut context[c]).unwrap())
                 }
                 Seq::Bypass(b) => {
-                    assert_eq!(*b, reader.get_bypass().unwrap())
+                    assert_eq!(b, reader.get_bypass().unwrap())
                 }
             }
         }
@@ -125,13 +133,17 @@ fn test_seq_vp8(seq: &[Seq]) {
 fn test_seq_h265(seq: &[Seq]) {
     let mut output = Vec::new();
     {
-        let mut context = H265Context::default();
+        let mut context = Vec::new();
+        for _ in 0..16 {
+            context.push(H265Context::default());
+        }
+
         let mut writer = H265Writer::new(&mut output);
 
-        for s in seq {
+        for &s in seq {
             match s {
-                Seq::Normal(b) => writer.put(*b, &mut context).unwrap(),
-                Seq::Bypass(b) => writer.put_bypass(*b).unwrap(),
+                Seq::Normal(b, c) => writer.put(b, &mut context[c]).unwrap(),
+                Seq::Bypass(b) => writer.put_bypass(b).unwrap(),
             }
         }
 
@@ -140,16 +152,20 @@ fn test_seq_h265(seq: &[Seq]) {
 
     // now try reading it
     {
-        let mut context = H265Context::default();
+        let mut context = Vec::new();
+        for _ in 0..16 {
+            context.push(H265Context::default());
+        }
+
         let mut reader = H265Reader::new(Cursor::new(&output)).unwrap();
 
-        for s in seq {
+        for &s in seq {
             match s {
-                Seq::Normal(b) => {
-                    assert_eq!(*b, reader.get(&mut context).unwrap())
+                Seq::Normal(b, c) => {
+                    assert_eq!(b, reader.get(&mut context[c]).unwrap())
                 }
                 Seq::Bypass(b) => {
-                    assert_eq!(*b, reader.get_bypass().unwrap())
+                    assert_eq!(b, reader.get_bypass().unwrap())
                 }
             }
         }
@@ -216,17 +232,22 @@ fn test_basic_permutations_h264() {
 
 #[test]
 fn test_random_sequences() {
-    for i in 1..27 {
-        let mut seed: u32 = 27 + i;
+    use rand::Rng;
 
+    let mut rng = rand::thread_rng();
+
+    let probs: [f64; 16] = [
+        0.001, 0.01, 0.1, 0.11, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9, 0.91, 0.99, 0.999, 0.9999, 1.0,
+    ];
+
+    for _ in 1..1000 {
         let mut seq = Vec::new();
 
-        for _i in 0..10000 {
-            seed = seed.wrapping_mul(10000019) + 7;
+        for _ in 0..1000 {
+            let ctx = rng.gen_range(0..16);
 
-            seq.push(match seed % 4 {
-                0 => Seq::Normal(true),
-                1 => Seq::Normal(false),
+            seq.push(match rng.gen_range(0..4) {
+                0 | 1 => Seq::Normal(rng.gen_bool(probs[ctx]), ctx),
                 2 => Seq::Bypass(false),
                 _ => Seq::Bypass(true),
             });
@@ -235,4 +256,30 @@ fn test_random_sequences() {
         test_seq_h265(&seq);
         test_seq_vp8(&seq);
     }
+}
+
+#[test]
+fn test_all_0() {
+    let all_0 = vec![Seq::Normal(false, 0); 10000];
+
+    test_seq_h265(&all_0);
+    test_seq_vp8(&all_0);
+}
+
+#[test]
+fn test_all_1() {
+    let all_1 = vec![Seq::Normal(true, 0); 10000];
+
+    test_seq_h265(&all_1);
+    test_seq_vp8(&all_1);
+}
+
+#[test]
+fn test_alt() {
+    let mut seq = Vec::new();
+    for i in 0..10000 {
+        seq.push(Seq::Normal(i % 2 == 0, 0));
+    }
+    test_seq_h265(&seq);
+    test_seq_vp8(&seq);
 }
