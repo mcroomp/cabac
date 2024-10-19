@@ -71,33 +71,32 @@ impl VP8Context {
         PROB_LOOKUP[self.counts as usize]
     }
 
-    /// called to adjust the probability in the context when the observed symbol zero true
     #[inline(always)]
-    pub fn record_and_update_true_obs(&mut self) {
-        let c = u32::from(self.counts) + 1;
-        if c & 0xff != 0 {
-            // non-overflow case is easy
-            self.counts = c as u16;
-        } else {
-            // normalize, except special case where it is all trues
-            if c & !0x0200 != 0 {
-                self.counts = ((c >> 1) | 129) as u16;
-            }
-        }
-    }
+    pub fn record_and_update_bit(&mut self, bit: bool) {
+        // rotation is used to update either the true or false counter
+        // this allows the same code to be used without branching,
+        // which makes the CPU about 20% happier.
+        //
+        // Since the bits are randomly 1/0, the CPU branch predictor does
+        // a terrible job and ends up wasting a lot of time. Normally
+        // branches are a better idea if the branch very predictable vs
+        // this case where it is better to always pay the price of the
+        // extra rotation to avoid the branch.
+        let orig = self.counts.rotate_left(bit as u32 * 8);
+        let (mut sum, o) = orig.overflowing_add(0x100);
+        if o {
+            // normalize, except in special case where we have 0xff or more same bits in a row
+            // in which case we want to bias the probability to get better compression
+            //
+            // CPU branch prediction soon realizes that this section is not often executed
+            // and will optimize for the common case where the counts are not 0xff.
+            let mask = if orig == 0xff01 { 0xff00 } else { 0x8100 };
 
-    /// called to adjust the probability in the context when the observed symbol zero false
-    #[inline(always)]
-    pub fn record_and_update_false_obs(&mut self) {
-        let (result, overflow) = self.counts.overflowing_add(0x100);
-        if !overflow {
-            self.counts = result;
-        } else {
-            // normalize, except in special case where it is all falses
-            if self.counts != 0xff01 {
-                self.counts = ((1 + (self.counts & 0xff) as u32) >> 1) as u16 | 0x8100;
-            }
+            // upper byte is 0 since we incremented 0xffxx so we don't have to mask it
+            sum = ((1 + sum) >> 1) | mask;
         }
+
+        self.counts = sum.rotate_left(bit as u32 * 8);
     }
 }
 
@@ -126,8 +125,8 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
         let bit = tmp_value >= big_split;
 
         let shift;
+        branch.record_and_update_bit(bit);
         if bit {
-            branch.record_and_update_true_obs();
             tmp_range -= split;
             tmp_value -= big_split;
 
@@ -143,7 +142,6 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
 
             shift = tmp_range.leading_zeros() as i32 - 24;
         } else {
-            branch.record_and_update_false_obs();
             tmp_range = split;
 
             // optimizer understands that split > 0
@@ -333,14 +331,13 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         let mut tmp_low_value = self.low_value;
 
         let mut shift;
+        branch.record_and_update_bit(value);
         if value {
-            branch.record_and_update_true_obs();
             tmp_low_value += split;
             tmp_range -= split;
 
             shift = (tmp_range as u8).leading_zeros() as i32;
         } else {
-            branch.record_and_update_false_obs();
             tmp_range = split;
 
             // optimizer understands that split > 0, so it can optimize this
@@ -515,7 +512,7 @@ fn test_all_probabilities() {
 
         for _k in 0..10 {
             old_f.record_obs_and_update(false);
-            new_f.record_and_update_false_obs();
+            new_f.record_and_update_bit(false);
             assert_eq!(old_f.probability, new_f.get_probability());
         }
 
@@ -523,13 +520,21 @@ fn test_all_probabilities() {
             counts: [(i >> 8) as u8, i as u8],
             probability: 0,
         };
-        let mut new_t = VP8Context { counts: i as u16 };
+        let mut new_t = VP8Context { counts: i };
 
         for _k in 0..10 {
             old_t.record_obs_and_update(true);
-            new_t.record_and_update_true_obs();
+            new_t.record_and_update_bit(true);
 
-            assert_eq!(old_t.probability, new_t.get_probability());
+            if old_t.probability == 0 {
+                // there is a change of behavior here compared to the C++ version,
+                // but because of the way split is calculated it doesn't result in an
+                // overall change in the way that encoding is done, but it does simplify
+                // one of the corner cases.
+                assert_eq!(new_t.get_probability(), 1);
+            } else {
+                assert_eq!(old_t.probability, new_t.get_probability());
+            }
         }
     }
 }
