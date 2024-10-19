@@ -18,6 +18,8 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” 
 
 use std::io::{Read, Result, Write};
 
+use byteorder::WriteBytesExt;
+
 use crate::traits::{CabacReader, CabacWriter};
 
 const BITS_IN_BYTE: i32 = 8;
@@ -247,7 +249,6 @@ pub struct VP8Writer<W> {
     range: u32,
     bits_left: i32,
     writer: W,
-    buffer: Vec<u8>,
     num_ff_bytes: u32,
     buffered_byte: Option<u8>,
 }
@@ -258,7 +259,6 @@ impl<W: Write> VP8Writer<W> {
             low_value: 0,
             range: 255,
             bits_left: -24,
-            buffer: Vec::new(),
             writer: writer,
             num_ff_bytes: 0,
             buffered_byte: None,
@@ -268,15 +268,6 @@ impl<W: Write> VP8Writer<W> {
         retval.put(false, &mut dummy_branch)?;
 
         Ok(retval)
-    }
-
-    /// When buffer is full and is going to be sent to output, preserve buffer data that
-    /// is not final and should carried over to the next buffer.
-    fn flush_non_final_data(&mut self) -> Result<()> {
-        self.writer.write_all(&self.buffer)?;
-        self.buffer.drain(..);
-
-        Ok(())
     }
 
     #[inline]
@@ -291,10 +282,11 @@ impl<W: Write> VP8Writer<W> {
         let last_byte = *tmp_low_value >> (24 - offset);
 
         if (last_byte & 0x100) != 0 {
-            self.buffer.push(self.buffered_byte.take().unwrap() + 1);
+            self.writer
+                .write_u8(self.buffered_byte.take().unwrap() + 1)?;
 
             while self.num_ff_bytes > 0 {
-                self.buffer.push(0);
+                self.writer.write_u8(0)?;
                 self.num_ff_bytes -= 1;
             }
         }
@@ -306,11 +298,11 @@ impl<W: Write> VP8Writer<W> {
             assert!(self.buffered_byte.is_some());
         } else {
             if let Some(x) = self.buffered_byte.take() {
-                self.buffer.push(x);
+                self.writer.write_u8(x)?;
             }
 
             while self.num_ff_bytes > 0 {
-                self.buffer.push(0xff);
+                self.writer.write_u8(0xff)?;
                 self.num_ff_bytes -= 1;
             }
             self.buffered_byte = Some(last_byte);
@@ -320,11 +312,6 @@ impl<W: Write> VP8Writer<W> {
         *shift = *tmp_count;
         *tmp_low_value &= 0xffffff;
         *tmp_count -= 8;
-
-        // check if we're out of buffer space, if yes - send the buffer to output,
-        if self.buffer.len() > 65536 - 128 {
-            self.flush_non_final_data()?;
-        }
 
         Ok(())
     }
@@ -417,20 +404,13 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         }
 
         if let Some(x) = self.buffered_byte.take() {
-            self.buffer.push(x);
+            self.writer.write_u8(x)?;
         }
 
         while self.num_ff_bytes > 0 {
-            self.buffer.push(0xff);
+            self.writer.write_u8(0xff)?;
             self.num_ff_bytes -= 1;
         }
-
-        // Ensure there's no ambigous collision with any index marker bytes
-        if (self.buffer.last().unwrap() & 0xe0) == 0xc0 {
-            self.buffer.push(0);
-        }
-
-        self.writer.write_all(&self.buffer[..])?;
 
         Ok(())
     }
