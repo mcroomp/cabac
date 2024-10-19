@@ -248,6 +248,8 @@ pub struct VP8Writer<W> {
     bits_left: i32,
     writer: W,
     buffer: Vec<u8>,
+    num_buffered_bytes: u32,
+    buffered_byte: u32,
 }
 
 impl<W: Write> VP8Writer<W> {
@@ -258,6 +260,8 @@ impl<W: Write> VP8Writer<W> {
             bits_left: -24,
             buffer: Vec::new(),
             writer: writer,
+            num_buffered_bytes: 0,
+            buffered_byte: 0xff,
         };
 
         let mut dummy_branch = VP8Context::default();
@@ -269,20 +273,13 @@ impl<W: Write> VP8Writer<W> {
     /// When buffer is full and is going to be sent to output, preserve buffer data that
     /// is not final and should carried over to the next buffer.
     fn flush_non_final_data(&mut self) -> Result<()> {
-        // carry over buffer data that might be not final
-        let mut i = self.buffer.len() - 1;
-        while self.buffer[i] == 0xFF {
-            assert!(i > 0);
-            i -= 1;
-        }
-
-        self.writer.write_all(&self.buffer[..i])?;
-        self.buffer.drain(..i);
+        self.writer.write_all(&self.buffer)?;
+        self.buffer.drain(..);
 
         Ok(())
     }
 
-    #[inline(always)]
+    #[inline]
     fn send_to_output(
         &mut self,
         shift: &mut i32,
@@ -291,20 +288,27 @@ impl<W: Write> VP8Writer<W> {
     ) -> Result<()> {
         let offset = *shift - *tmp_count;
 
-        if ((*tmp_low_value << (offset - 1)) & 0x80000000) != 0 {
-            let mut x = self.buffer.len() - 1;
+        let last_byte = *tmp_low_value >> (24 - offset);
 
-            while self.buffer[x] == 0xFF {
-                self.buffer[x] = 0;
-
-                assert!(x > 0);
-                x -= 1;
+        if (last_byte & 0x100) != 0 {
+            *self.buffer.last_mut().unwrap() += 1;
+            while self.num_buffered_bytes > 0 {
+                self.buffer.push(0);
+                self.num_buffered_bytes -= 1;
             }
-
-            self.buffer[x] += 1;
         }
 
-        self.buffer.push((*tmp_low_value >> (24 - offset)) as u8);
+        let last_byte = last_byte as u8;
+
+        if last_byte == 0xff {
+            self.num_buffered_bytes += 1;
+        } else {
+            while self.num_buffered_bytes > 0 {
+                self.buffer.push(0xff);
+                self.num_buffered_bytes -= 1;
+            }
+            self.buffer.push(last_byte);
+        }
 
         *tmp_low_value <<= offset;
         *shift = *tmp_count;
@@ -404,6 +408,11 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         for _i in 0..32 {
             let mut dummy_branch = VP8Context::default();
             self.put(false, &mut dummy_branch)?;
+        }
+
+        while self.num_buffered_bytes > 0 {
+            self.buffer.push(0xff);
+            self.num_buffered_bytes -= 1;
         }
 
         // Ensure there's no ambigous collision with any index marker bytes
