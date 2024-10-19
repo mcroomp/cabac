@@ -291,9 +291,8 @@ impl<W: Write> VP8Writer<W> {
         let last_byte = *tmp_low_value >> (24 - offset);
 
         if (last_byte & 0x100) != 0 {
-            assert_eq!(*self.buffer.last().unwrap(), self.buffered_byte.unwrap());
+            self.buffer.push(self.buffered_byte.take().unwrap() + 1);
 
-            *self.buffer.last_mut().unwrap() += 1;
             while self.num_ff_bytes > 0 {
                 self.buffer.push(0);
                 self.num_ff_bytes -= 1;
@@ -306,11 +305,14 @@ impl<W: Write> VP8Writer<W> {
             self.num_ff_bytes += 1;
             assert!(self.buffered_byte.is_some());
         } else {
+            if let Some(x) = self.buffered_byte.take() {
+                self.buffer.push(x);
+            }
+
             while self.num_ff_bytes > 0 {
                 self.buffer.push(0xff);
                 self.num_ff_bytes -= 1;
             }
-            self.buffer.push(last_byte);
             self.buffered_byte = Some(last_byte);
         }
 
@@ -412,6 +414,10 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         for _i in 0..32 {
             let mut dummy_branch = VP8Context::default();
             self.put(false, &mut dummy_branch)?;
+        }
+
+        if let Some(x) = self.buffered_byte.take() {
+            self.buffer.push(x);
         }
 
         while self.num_ff_bytes > 0 {
