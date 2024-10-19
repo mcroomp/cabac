@@ -248,7 +248,7 @@ pub struct VP8Writer<W> {
     bits_left: i32,
     writer: W,
     buffer: Vec<u8>,
-    num_buffered_bytes: u32,
+    num_ff_bytes: u32,
     buffered_byte: u32,
 }
 
@@ -260,7 +260,7 @@ impl<W: Write> VP8Writer<W> {
             bits_left: -24,
             buffer: Vec::new(),
             writer: writer,
-            num_buffered_bytes: 0,
+            num_ff_bytes: 0,
             buffered_byte: 0xff,
         };
 
@@ -292,20 +292,20 @@ impl<W: Write> VP8Writer<W> {
 
         if (last_byte & 0x100) != 0 {
             *self.buffer.last_mut().unwrap() += 1;
-            while self.num_buffered_bytes > 0 {
+            while self.num_ff_bytes > 0 {
                 self.buffer.push(0);
-                self.num_buffered_bytes -= 1;
+                self.num_ff_bytes -= 1;
             }
         }
 
         let last_byte = last_byte as u8;
 
         if last_byte == 0xff {
-            self.num_buffered_bytes += 1;
+            self.num_ff_bytes += 1;
         } else {
-            while self.num_buffered_bytes > 0 {
+            while self.num_ff_bytes > 0 {
                 self.buffer.push(0xff);
-                self.num_buffered_bytes -= 1;
+                self.num_ff_bytes -= 1;
             }
             self.buffer.push(last_byte);
         }
@@ -410,9 +410,9 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
             self.put(false, &mut dummy_branch)?;
         }
 
-        while self.num_buffered_bytes > 0 {
+        while self.num_ff_bytes > 0 {
             self.buffer.push(0xff);
-            self.num_buffered_bytes -= 1;
+            self.num_ff_bytes -= 1;
         }
 
         // Ensure there's no ambigous collision with any index marker bytes
