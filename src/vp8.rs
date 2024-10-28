@@ -20,7 +20,7 @@ use std::io::{Read, Result, Write};
 
 use byteorder::WriteBytesExt;
 
-use crate::traits::{CabacReader, CabacWriter};
+use crate::traits::{CabacReader, CabacWriter, GetInnerBuffer};
 
 const BITS_IN_BYTE: i32 = 8;
 const BITS_IN_LONG: i32 = 64;
@@ -251,6 +251,12 @@ pub struct VP8Writer<W> {
     writer: W,
     num_buffered_bytes: u32,
     buffered_byte: u8,
+}
+
+impl GetInnerBuffer for VP8Writer<Vec<u8>> {
+    fn inner_buffer(&self) -> &[u8] {
+        &self.writer
+    }
 }
 
 impl<W: Write> VP8Writer<W> {
