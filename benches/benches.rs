@@ -1,7 +1,8 @@
 use std::io::Cursor;
 
 use cabac::h265::{H265Reader, H265Writer};
-use cabac::rans::{RansReader64, RansWriter};
+use cabac::rans32::{RansReader32, RansWriter32};
+use cabac::rans64::{RansReader64, RansWriter64};
 use cabac::traits::{CabacReader, CabacWriter, GetInnerBuffer};
 
 use cabac::vp8::{VP8Reader, VP8Writer};
@@ -232,11 +233,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
     });
 
-    c.bench_function("Rans read", |b| {
+    c.bench_function("Rans64 read", |b| {
         test_batch(
             b,
             |v| RansReader64::new(Cursor::new(v)).unwrap(),
-            || RansWriter::new(Vec::new()),
+            || RansWriter64::new(Vec::new()),
+            |r| alternating_get_init(r),
+            |r| alternating_get_run(r),
+        );
+    });
+
+    c.bench_function("Rans32 read", |b| {
+        test_batch(
+            b,
+            |v| RansReader32::new(Cursor::new(v)).unwrap(),
+            || RansWriter32::new(Vec::new()),
             |r| alternating_get_init(r),
             |r| alternating_get_run(r),
         );
@@ -276,7 +287,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         test_batch(
             b,
             |v| RansReader64::new(Cursor::new(v)).unwrap(),
-            || RansWriter::new(Vec::new()),
+            || RansWriter64::new(Vec::new()),
             |r| bypass_init(r),
             |r| bypass_run(r),
         );
