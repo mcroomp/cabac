@@ -217,7 +217,7 @@ impl<R: Read> VP8Reader<R> {
         Self::vpx_reader_fill(&mut r.value, &mut r.count, &mut r.upstream_reader)?;
 
         let mut dummy_branch = VP8Context::new();
-        r.get(&mut dummy_branch)?; // marker bit
+        let _ = r.get(&mut dummy_branch)?; // marker bit
 
         return Ok(r);
     }
@@ -514,7 +514,7 @@ fn test_all_probabilities() {
             continue;
         }
 
-        let mut new_f = VP8Context { counts: i as u16 };
+        let mut new_f = VP8Context { counts: i };
 
         for _k in 0..10 {
             old_f.record_obs_and_update(false);

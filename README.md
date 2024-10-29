@@ -1,4 +1,4 @@
-# Context-adaptive binary arithmetic coding (CABAC) encoder / decoder in Rust
+# Safe Context-adaptive binary arithmetic coding (CABAC) encoder / decoder in Rust
 Implementation of CABAC H.264/265, VP8 and rANS encoders. 
 
 The coder is designed to encode binary values in an efficient manner, taking into account the
@@ -19,7 +19,8 @@ There are three encoders included:
 
 Performance notes:
 - Bench is included 
-- rANS has not yet been significantly optimized although it outperforms the other encoders
+- No unsafe code
+- rANS has not yet been significantly optimized although it outperforms the other encoders, encoding uses division although it could use an inverse multiple and decoding is done one value at a time, although it could be done in parallel.
 
 Here is the relative performance (in microseconds, lower is better) for encoding, decoding as measured on Intel i9-12900K:
 

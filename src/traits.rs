@@ -70,7 +70,7 @@ pub trait CabacWriter<Context> {
 
         loop {
             let cur_bit = (v & (1 << index)) != 0;
-            self.put(cur_bit, &mut branches[index as usize][serialized_so_far])?;
+            self.put(cur_bit, &mut branches[index][serialized_so_far])?;
             serialized_so_far <<= 1;
             serialized_so_far |= cur_bit as usize;
 
@@ -137,7 +137,7 @@ pub trait CabacReader<Context> {
         let mut decoded_so_far = 0;
 
         loop {
-            let cur_bit = self.get(&mut branches[index as usize][decoded_so_far])? as u8;
+            let cur_bit = self.get(&mut branches[index][decoded_so_far])? as u8;
             value |= cur_bit << index;
             decoded_so_far <<= 1;
             decoded_so_far |= cur_bit as usize;

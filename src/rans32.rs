@@ -27,12 +27,16 @@ impl WriteU16 for VecDeque<u16> {
     }
 }
 
+/// reads a u16 from the reader in little endian format
+#[inline(always)]
 fn read_u16(r: &mut impl Read) -> Result<u16> {
     let mut b = [0; 2];
     r.read_exact(&mut b)?;
     Ok(u16::from_le_bytes(b))
 }
 
+/// Rans32State is a 32 bit rANS state.
+/// The SCALE_BITS is the number of bits of resolution needed.
 #[derive(Clone, Copy)]
 pub struct Rans32State<const SCALE_BITS: u32>(u32);
 
@@ -50,9 +54,9 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
     }
 
     /// Initializes a rANS decoder.
-    pub fn new_decoder(pptr: &mut impl Read) -> Result<Self> {
+    pub fn new_decoder(source: &mut impl Read) -> Result<Self> {
         Ok(Rans32State(
-            u32::from(read_u16(pptr)?) | (u32::from(read_u16(pptr)?) << 16),
+            u32::from(read_u16(source)?) | (u32::from(read_u16(source)?) << 16),
         ))
     }
 
@@ -66,11 +70,16 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
 
     // Returns the current cumulative frequency.
     pub fn dec_get(&self) -> u32 {
-        (self.0 & ((1u32 << SCALE_BITS) - 1)) as u32
+        self.0 & ((1u32 << SCALE_BITS) - 1)
     }
 
     // Advances in the bit stream by "popping" a single symbol.
-    pub fn dec_advance(&mut self, r: &mut impl Read, start: u32, freq: NonZeroU32) -> Result<()> {
+    pub fn dec_advance(
+        &mut self,
+        source: &mut impl Read,
+        start: u32,
+        freq: NonZeroU32,
+    ) -> Result<()> {
         let mask = (1u32 << SCALE_BITS) - 1;
 
         // s, x = D(x)
@@ -79,7 +88,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
 
         // Renormalize
         if x < RANS_WORD_L {
-            x = (x << 16) | u32::from(read_u16(r)?);
+            x = (x << 16) | u32::from(read_u16(source)?);
             debug_assert!(x >= RANS_WORD_L);
         }
 
@@ -87,7 +96,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
         Ok(())
     }
 
-    // Encodes a single symbol
+    /// Encodes a single symbol
     pub fn encode(&mut self, output: &mut impl WriteU16, start: u32, freq: NonZeroU32) {
         let mut x = self.0;
         let x_max = ((RANS_WORD_L >> SCALE_BITS) << 16) * u32::from(freq);
@@ -101,7 +110,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
         self.0 = (x / freq) << SCALE_BITS | (x % freq) + start;
     }
 
-    // Encodes 2 symbols
+    /// Encodes 2 symbols in parallel
     pub fn encode_2(
         output: &mut impl WriteU16,
         v: [(&mut Rans32State<SCALE_BITS>, u32, NonZeroU32); 2],
@@ -130,7 +139,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
         v[1].0 .0 = (x1 / freq1) << SCALE_BITS | (x1 % freq1) + start1;
     }
 
-    // Advances in the bit stream without output.
+    /// Advances in the bit stream without output.
     pub fn dec_advance_step(&mut self, start: u32, freq: u32) {
         let mask = (1u32 << SCALE_BITS) - 1;
 
@@ -257,6 +266,7 @@ impl<W: Write> CabacWriter<RansContext> for RansWriter32<W> {
     }
 }
 
+#[inline(always)]
 fn start_freq(bit: bool, prob: NonZeroU8) -> (u32, NonZeroU32) {
     if bit {
         (
@@ -268,6 +278,7 @@ fn start_freq(bit: bool, prob: NonZeroU8) -> (u32, NonZeroU32) {
     }
 }
 
+/// implements two parallel RANS readers that alternate
 pub struct RansReader32<R> {
     rans0: Rans32State<8>,
     rans1: Rans32State<8>,
@@ -302,6 +313,7 @@ impl<R: Read> RansReader32<R> {
 }
 
 impl<R: Read> CabacReader<RansContext> for RansReader32<R> {
+    /// reads a bit and then swaps the rans states
     fn get(&mut self, branch: &mut RansContext) -> Result<bool> {
         self.check_reset_stream()?;
 
@@ -322,6 +334,7 @@ impl<R: Read> CabacReader<RansContext> for RansReader32<R> {
         Ok(bit)
     }
 
+    /// reads a bit without updating the probability
     fn get_bypass(&mut self) -> Result<bool> {
         self.check_reset_stream()?;
 
