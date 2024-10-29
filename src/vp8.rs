@@ -16,11 +16,14 @@ Neither the name of Google nor the names of its contributors may be used to endo
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-use std::io::{Read, Result, Write};
+use std::{
+    io::{Read, Result, Write},
+    num::NonZeroU8,
+};
 
 use byteorder::WriteBytesExt;
 
-use crate::traits::{CabacReader, CabacWriter};
+use crate::traits::{CabacReader, CabacWriter, GetInnerBuffer};
 
 const BITS_IN_BYTE: i32 = 8;
 const BITS_IN_LONG: i32 = 64;
@@ -46,21 +49,23 @@ impl Default for VP8Context {
 ///
 /// I suspect the reason is that there are some very common probability patterns that result in those cache
 /// lines staying in L1 cache, with only the rarer patterns causing cache misses.
-const fn problookup() -> [u8; 65536] {
-    let mut retval = [0; 65536];
+const fn problookup() -> [NonZeroU8; 65536] {
+    let mut retval = [NonZeroU8::MIN; 65536];
     let mut i = 1i32;
     while i < 65536 {
         let a = i >> 8;
         let b = i & 0xff;
 
-        retval[i as usize] = ((a << 8) / (a + b)) as u8;
+        if let Some(x) = NonZeroU8::new(((a << 8) / (a + b)) as u8) {
+            retval[i as usize] = x;
+        }
         i += 1;
     }
 
     return retval;
 }
 
-static PROB_LOOKUP: [u8; 65536] = problookup();
+static PROB_LOOKUP: [NonZeroU8; 65536] = problookup();
 
 impl VP8Context {
     pub fn new() -> Self {
@@ -69,7 +74,7 @@ impl VP8Context {
 
     /// returns the probability of the next symbol being zero (in the range 0-255)
     #[inline(always)]
-    pub fn get_probability(&self) -> u8 {
+    pub fn get_probability(&self) -> NonZeroU8 {
         PROB_LOOKUP[self.counts as usize]
     }
 
@@ -120,7 +125,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             Self::vpx_reader_fill(&mut tmp_value, &mut tmp_count, &mut self.upstream_reader)?;
         }
 
-        let probability = branch.get_probability() as u32;
+        let probability = branch.get_probability().get() as u32;
 
         let split = 1 + (((tmp_range - 1) * probability) >> BITS_IN_BYTE);
         let big_split = (split as u64) << BITS_IN_LONG_MINUS_LAST_BYTE;
@@ -253,6 +258,12 @@ pub struct VP8Writer<W> {
     buffered_byte: u8,
 }
 
+impl GetInnerBuffer for VP8Writer<Vec<u8>> {
+    fn inner_buffer(&self) -> &[u8] {
+        &self.writer
+    }
+}
+
 impl<W: Write> VP8Writer<W> {
     pub fn new(writer: W) -> Result<Self> {
         let mut retval = VP8Writer {
@@ -322,7 +333,7 @@ impl<W: Write> VP8Writer<W> {
 impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
     #[inline(always)]
     fn put(&mut self, value: bool, branch: &mut VP8Context) -> Result<()> {
-        let probability = branch.get_probability() as u32;
+        let probability = branch.get_probability().get() as u32;
 
         let mut tmp_range = self.range;
         let split = 1 + (((tmp_range - 1) * probability) >> 8);
@@ -508,7 +519,7 @@ fn test_all_probabilities() {
         for _k in 0..10 {
             old_f.record_obs_and_update(false);
             new_f.record_and_update_bit(false);
-            assert_eq!(old_f.probability, new_f.get_probability());
+            assert_eq!(old_f.probability, new_f.get_probability().get());
         }
 
         let mut old_t = OriginalImplForTest {
@@ -526,9 +537,9 @@ fn test_all_probabilities() {
                 // but because of the way split is calculated it doesn't result in an
                 // overall change in the way that encoding is done, but it does simplify
                 // one of the corner cases.
-                assert_eq!(new_t.get_probability(), 1);
+                assert_eq!(new_t.get_probability(), NonZeroU8::new(1).unwrap());
             } else {
-                assert_eq!(old_t.probability, new_t.get_probability());
+                assert_eq!(old_t.probability, new_t.get_probability().get());
             }
         }
     }

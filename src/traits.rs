@@ -1,5 +1,10 @@
 use std::{cmp, io::Result};
 
+/// provides access to inner buffer if this is backed by a Vec<u8>
+pub trait GetInnerBuffer {
+    fn inner_buffer(&self) -> &[u8];
+}
+
 /// implementation of a context aware binary arithmetic encoder
 pub trait CabacWriter<Context> {
     /// write using bypass bin for bits that aren't worth encoding

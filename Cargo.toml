@@ -16,6 +16,7 @@ debug=true
 
 [dependencies]
 byteorder = "1.4"
+bytemuck = "1.11"
 
 [dev-dependencies]
 criterion = "0.5"
