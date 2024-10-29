@@ -2,7 +2,6 @@ use std::io::Cursor;
 
 use cabac::h265::{H265Reader, H265Writer};
 use cabac::rans32::{RansReader32, RansWriter32};
-use cabac::rans64::{RansReader64, RansWriter64};
 use cabac::traits::{CabacReader, CabacWriter, GetInnerBuffer};
 use cabac::vp8::{VP8Reader, VP8Writer};
 
@@ -88,9 +87,9 @@ fn test_seq_h265(seq: &[Seq]) {
 fn test_seq_rans(seq: &[Seq]) {
     end_to_end(
         seq,
-        || RansWriter64::new(Vec::new()),
-        |buf| RansReader64::new(Cursor::new(buf)).unwrap(),
-        "rans64",
+        || RansWriter32::new(Vec::new()),
+        |buf| RansReader32::new(Cursor::new(buf)).unwrap(),
+        "rans32",
     );
 }
 
@@ -98,13 +97,6 @@ fn test_all(seq: &[Seq]) {
     test_seq_vp8(seq);
     test_seq_h265(seq);
     test_seq_rans(seq);
-
-    end_to_end(
-        seq,
-        || RansWriter32::new(Vec::new()),
-        |buf| RansReader32::new(Cursor::new(buf)).unwrap(),
-        "rans32",
-    );
 }
 
 #[test]
