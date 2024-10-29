@@ -59,24 +59,14 @@ fn generic_get_pattern<'a, C: Default, CR: CabacReader<C>, FR: FnOnce(&'a [u8]) 
 }
 
 #[cfg(test)]
-fn generic_test_pattern(
-    get: fn(bool, &[bool], &[u8]) -> Box<[bool]>,
-    put: fn(bool, &[bool]) -> Vec<u8>,
-) {
+fn generic_test_pattern(get: fn(&[bool], &[u8]) -> Box<[bool]>, put: fn(&[bool]) -> Vec<u8>) {
     let mut pattern = Vec::new();
     rand::Rng::sample_iter(rand::thread_rng(), &rand::distributions::Standard)
         .take(65535)
         .for_each(|x| pattern.push(x));
 
-    // test bypass
-    let encoded = put(true, &pattern);
-    let decoded = get(true, &pattern, &encoded);
-
-    assert!(pattern == &decoded[..]);
-
-    // test normal
-    let encoded = put(false, &pattern);
-    let decoded = get(false, &pattern, &encoded);
+    let encoded = put(&pattern);
+    let decoded = get(&pattern, &encoded);
 
     assert!(pattern == &decoded[..]);
 }
@@ -84,14 +74,28 @@ fn generic_test_pattern(
 // rans32
 #[inline(never)]
 #[allow(dead_code)]
-pub fn rans32_put_pattern(bypass: bool, pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(bypass, pattern, || RansWriter32::new(Vec::new()))
+pub fn rans32_put_pattern(pattern: &[bool]) -> Vec<u8> {
+    generic_put_pattern(false, pattern, || RansWriter32::new(Vec::new()))
 }
 
 #[inline(never)]
 #[allow(dead_code)]
-pub fn rans32_get_pattern(bypass: bool, pattern: &[bool], source: &[u8]) -> Box<[bool]> {
-    generic_get_pattern(bypass, pattern, &source, |vec| {
+pub fn rans32_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    generic_get_pattern(false, pattern, &source, |vec| {
+        RansReader32::new(Cursor::new(vec)).unwrap()
+    })
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn rans32_put_pattern_bypass(pattern: &[bool]) -> Vec<u8> {
+    generic_put_pattern(true, pattern, || RansWriter32::new(Vec::new()))
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn rans32_get_pattern_bypass(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    generic_get_pattern(true, pattern, &source, |vec| {
         RansReader32::new(Cursor::new(vec)).unwrap()
     })
 }
@@ -99,18 +103,33 @@ pub fn rans32_get_pattern(bypass: bool, pattern: &[bool], source: &[u8]) -> Box<
 #[test]
 fn rans32_test_pattern() {
     generic_test_pattern(rans32_get_pattern, rans32_put_pattern);
+    generic_test_pattern(rans32_get_pattern_bypass, rans32_put_pattern_bypass);
 }
 
 #[inline(never)]
 #[allow(dead_code)]
-pub fn vp8_put_pattern(bypass: bool, pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(bypass, pattern, || VP8Writer::new(Vec::new()).unwrap())
+pub fn vp8_put_pattern(pattern: &[bool]) -> Vec<u8> {
+    generic_put_pattern(false, pattern, || VP8Writer::new(Vec::new()).unwrap())
 }
 
 #[inline(never)]
 #[allow(dead_code)]
-pub fn vp8_get_pattern(bypass: bool, pattern: &[bool], source: &[u8]) -> Box<[bool]> {
-    generic_get_pattern(bypass, pattern, source, |vec| {
+pub fn vp8_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    generic_get_pattern(false, pattern, source, |vec| {
+        VP8Reader::new(Cursor::new(vec)).unwrap()
+    })
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn vp8_put_pattern_bypass(pattern: &[bool]) -> Vec<u8> {
+    generic_put_pattern(true, pattern, || VP8Writer::new(Vec::new()).unwrap())
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn vp8_get_pattern_bypass(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    generic_get_pattern(true, pattern, source, |vec| {
         VP8Reader::new(Cursor::new(vec)).unwrap()
     })
 }
@@ -118,18 +137,33 @@ pub fn vp8_get_pattern(bypass: bool, pattern: &[bool], source: &[u8]) -> Box<[bo
 #[test]
 fn vp8_test_pattern() {
     generic_test_pattern(vp8_get_pattern, vp8_put_pattern);
+    generic_test_pattern(vp8_get_pattern_bypass, vp8_put_pattern_bypass);
 }
 
 #[inline(never)]
 #[allow(dead_code)]
-pub fn h265_put_pattern(bypass: bool, pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(bypass, pattern, || H265Writer::new(Vec::new()))
+pub fn h265_put_pattern(pattern: &[bool]) -> Vec<u8> {
+    generic_put_pattern(false, pattern, || H265Writer::new(Vec::new()))
 }
 
 #[inline(never)]
 #[allow(dead_code)]
-pub fn h265_get_pattern(bypass: bool, pattern: &[bool], source: &[u8]) -> Box<[bool]> {
-    generic_get_pattern(bypass, pattern, source, |vec| {
+pub fn h265_put_pattern_bypass(pattern: &[bool]) -> Vec<u8> {
+    generic_put_pattern(true, pattern, || H265Writer::new(Vec::new()))
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn h265_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    generic_get_pattern(false, pattern, source, |vec| {
+        H265Reader::new(Cursor::new(vec)).unwrap()
+    })
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn h265_get_pattern_bypass(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    generic_get_pattern(true, pattern, source, |vec| {
         H265Reader::new(Cursor::new(vec)).unwrap()
     })
 }
@@ -137,4 +171,5 @@ pub fn h265_get_pattern(bypass: bool, pattern: &[bool], source: &[u8]) -> Box<[b
 #[test]
 fn h264_test_pattern() {
     generic_test_pattern(h265_get_pattern, h265_put_pattern);
+    generic_test_pattern(h265_get_pattern_bypass, h265_put_pattern_bypass);
 }

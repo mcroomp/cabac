@@ -49,11 +49,13 @@ impl<const SCALE_BITS: u32> std::fmt::Debug for Rans32State<SCALE_BITS> {
 const RANS_WORD_L: u32 = 1 << 16; // Lower bound of our normalization interval
 
 impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
+    #[inline(always)]
     pub fn new_encoder() -> Self {
         Rans32State(RANS_WORD_L)
     }
 
     /// Initializes a rANS decoder.
+    #[inline(always)]
     pub fn new_decoder(source: &mut impl Read) -> Result<Self> {
         Ok(Rans32State(
             u32::from(read_u16(source)?) | (u32::from(read_u16(source)?) << 16),
@@ -61,6 +63,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
     }
 
     /// Flushes the rANS encoder.
+    #[inline(always)]
     pub fn enc_flush(&mut self, buffer: &mut impl WriteU16) {
         let x = self.0;
 
@@ -69,11 +72,13 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
     }
 
     // Returns the current cumulative frequency.
+    #[inline(always)]
     pub fn dec_get(&self) -> u32 {
         self.0 & ((1u32 << SCALE_BITS) - 1)
     }
 
     // Advances in the bit stream by "popping" a single symbol.
+    #[inline(always)]
     pub fn dec_advance(
         &mut self,
         source: &mut impl Read,
@@ -97,6 +102,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
     }
 
     /// Encodes a single symbol
+    #[inline(always)]
     pub fn encode(&mut self, output: &mut impl WriteU16, start: u32, freq: NonZeroU32) {
         let mut x = self.0;
         let x_max = ((RANS_WORD_L >> SCALE_BITS) << 16) * u32::from(freq);
@@ -111,6 +117,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
     }
 
     /// Encodes 2 symbols in parallel
+    #[inline(always)]
     pub fn encode_2(
         output: &mut impl WriteU16,
         v: [(&mut Rans32State<SCALE_BITS>, u32, NonZeroU32); 2],
@@ -140,6 +147,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
     }
 
     /// Advances in the bit stream without output.
+    #[inline(always)]
     pub fn dec_advance_step(&mut self, start: u32, freq: u32) {
         let mask = (1u32 << SCALE_BITS) - 1;
 
@@ -186,6 +194,7 @@ impl<W: Write> RansWriter32<W> {
         }
     }
 
+    #[cold]
     fn flush(&mut self) -> Result<()> {
         let mut rans0 = Rans32State::<8>::new_encoder();
         let mut rans1 = Rans32State::<8>::new_encoder();
@@ -235,6 +244,7 @@ impl<W: Write> RansWriter32<W> {
 }
 
 impl<W: Write> CabacWriter<RansContext> for RansWriter32<W> {
+    #[inline(always)]
     fn put(&mut self, bit: bool, branch: &mut RansContext) -> Result<()> {
         let prob = branch.0.get_probability();
         branch.0.record_and_update_bit(bit);
@@ -248,6 +258,7 @@ impl<W: Write> CabacWriter<RansContext> for RansWriter32<W> {
         Ok(())
     }
 
+    #[inline(always)]
     fn put_bypass(&mut self, bit: bool) -> Result<()> {
         if self.symbol_buffer_stack == 0 {
             self.flush()?;
@@ -261,6 +272,7 @@ impl<W: Write> CabacWriter<RansContext> for RansWriter32<W> {
         Ok(())
     }
 
+    #[inline(always)]
     fn finish(&mut self) -> Result<()> {
         self.flush()
     }
@@ -314,6 +326,7 @@ impl<R: Read> RansReader32<R> {
 
 impl<R: Read> CabacReader<RansContext> for RansReader32<R> {
     /// reads a bit and then swaps the rans states
+    #[inline(always)]
     fn get(&mut self, branch: &mut RansContext) -> Result<bool> {
         self.check_reset_stream()?;
 
@@ -335,6 +348,7 @@ impl<R: Read> CabacReader<RansContext> for RansReader32<R> {
     }
 
     /// reads a bit without updating the probability
+    #[inline(always)]
     fn get_bypass(&mut self) -> Result<bool> {
         self.check_reset_stream()?;
 

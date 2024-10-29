@@ -1,4 +1,7 @@
-use cabac::perf::{rans32_get_pattern, rans32_put_pattern, vp8_get_pattern, vp8_put_pattern};
+use cabac::perf::{
+    rans32_get_pattern, rans32_get_pattern_bypass, rans32_put_pattern, rans32_put_pattern_bypass,
+    vp8_get_pattern, vp8_put_pattern,
+};
 
 /// Generates the next pseudo-random number.
 /// Definitely non-cryptographic, just used for generating random test values.
@@ -80,14 +83,20 @@ static BOOL_PATTERN: [bool; 10240] = gen_pattern();
 
 fn main() {
     for i in 0..100000 {
-        let v = vp8_put_pattern(false, &BOOL_PATTERN);
-        let o = vp8_get_pattern(false, &BOOL_PATTERN, &v);
+        let v = vp8_put_pattern(&BOOL_PATTERN);
+        let o = vp8_get_pattern(&BOOL_PATTERN, &v);
         if i == 0 {
             assert!(o[..] == BOOL_PATTERN);
         }
 
-        let v = rans32_put_pattern(false, &BOOL_PATTERN);
-        let o = rans32_get_pattern(false, &BOOL_PATTERN, &v);
+        let v = rans32_put_pattern(&BOOL_PATTERN);
+        let o = rans32_get_pattern(&BOOL_PATTERN, &v);
+        if i == 0 {
+            assert!(o[..] == BOOL_PATTERN);
+        }
+
+        let v = rans32_put_pattern_bypass(&BOOL_PATTERN);
+        let o = rans32_get_pattern_bypass(&BOOL_PATTERN, &v);
         if i == 0 {
             assert!(o[..] == BOOL_PATTERN);
         }
