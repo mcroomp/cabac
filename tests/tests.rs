@@ -22,6 +22,7 @@ fn end_to_end<
     seq: &[Seq],
     write: FW,
     read: FR,
+    scheme: &str,
 ) {
     let mut context = Vec::new();
     for _i in 0..16 {
@@ -46,13 +47,21 @@ fn end_to_end<
 
     let mut reader = read(writer.inner_buffer().to_vec());
 
-    for &s in seq {
-        match s {
+    for (i, s) in seq.iter().enumerate() {
+        match *s {
             Seq::Normal(b, c) => {
-                assert_eq!(b, reader.get(&mut context[c]).unwrap())
+                assert_eq!(
+                    b,
+                    reader.get(&mut context[c]).unwrap(),
+                    "offset:{i} scheme:{scheme}"
+                );
             }
             Seq::Bypass(b) => {
-                assert_eq!(b, reader.get_bypass().unwrap())
+                assert_eq!(
+                    b,
+                    reader.get_bypass().unwrap(),
+                    "offset:{i} scheme:{scheme}"
+                );
             }
         }
     }
@@ -63,6 +72,7 @@ fn test_seq_vp8(seq: &[Seq]) {
         seq,
         || VP8Writer::new(Vec::new()).unwrap(),
         |buf| VP8Reader::new(Cursor::new(buf)).unwrap(),
+        "vp8",
     );
 }
 
@@ -71,6 +81,7 @@ fn test_seq_h265(seq: &[Seq]) {
         seq,
         || H265Writer::new(Vec::new()),
         |buf| H265Reader::new(Cursor::new(buf)).unwrap(),
+        "h265",
     );
 }
 
@@ -79,6 +90,7 @@ fn test_seq_rans(seq: &[Seq]) {
         seq,
         || RansWriter64::new(Vec::new()),
         |buf| RansReader64::new(Cursor::new(buf)).unwrap(),
+        "rans64",
     );
 }
 
@@ -91,6 +103,7 @@ fn test_all(seq: &[Seq]) {
         seq,
         || RansWriter32::new(Vec::new()),
         |buf| RansReader32::new(Cursor::new(buf)).unwrap(),
+        "rans32",
     );
 }
 

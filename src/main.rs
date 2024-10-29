@@ -1,118 +1,95 @@
-use std::io::Cursor;
+use cabac::perf::{rans32_get_pattern, rans32_put_pattern, vp8_get_pattern, vp8_put_pattern};
 
-use cabac::{
-    h265::{H265Context, H265Reader, H265Writer},
-    traits::{CabacReader, CabacWriter},
-    vp8::{VP8Context, VP8Reader, VP8Writer},
-};
+/// Generates the next pseudo-random number.
+/// Definitely non-cryptographic, just used for generating random test values.
+const fn next_rand_u64(state: u64) -> u64 {
+    // Constants for the LCG
+    const A: u64 = 6364136223846793005;
+    const C: u64 = 1442695040888963407;
 
-fn pattern(i: i32) -> bool {
-    i % 111 == 0
+    // Update the state and calculate the next number (rotate to avoid lack of
+    // randomness in low bits)
+    state.wrapping_mul(A).wrapping_add(C).rotate_left(31)
 }
 
-const LOOP: i32 = 100 * 1024;
+const RNG_SEED: u64 = 0x123456789abcdef0;
 
-fn norm_vp8(print: bool) {
-    let mut output = Vec::with_capacity(1000);
-    {
-        let mut writer = VP8Writer::new(&mut output).unwrap();
-        let mut context = VP8Context::default();
-        for i in 0..LOOP {
-            writer.put(pattern(i), &mut context).unwrap();
-        }
+const fn gen_pattern() -> [bool; 10240] {
+    let mut pattern = [false; 10240];
+    let mut rng = RNG_SEED;
 
-        writer.finish().unwrap();
+    let mut i = 0;
+    while i < 1000 {
+        pattern[i] = false;
+        i += 1;
+    }
+    while i < 2000 {
+        pattern[i] = true;
+        i += 1;
+    }
+    while i < 3000 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 2 == 0;
+        i += 1;
+    }
+    while i < 4000 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 10 == 0;
+        i += 1;
+    }
+    while i < 5000 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 30 == 0;
+        i += 1;
+    }
+    while i < 6000 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 30 != 0;
+        i += 1;
+    }
+    while i < 7000 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 10 != 0;
+        i += 1;
+    }
+    while i < 8000 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 5 != 0;
+        i += 1;
+    }
+    while i < 9000 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 6 != 0;
+        i += 1;
+    }
+    while i < 9500 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 9 == 0;
+        i += 1;
+    }
+    while i < 10240 {
+        rng = next_rand_u64(rng);
+        pattern[i] = rng % 2 == 0;
+        i += 1;
     }
 
-    {
-        let mut reader = VP8Reader::new(Cursor::new(&output)).unwrap();
-        let mut context = VP8Context::default();
-        for i in 0..LOOP {
-            assert_eq!(reader.get(&mut context).unwrap(), pattern(i));
-        }
-    }
-
-    if print {
-        println!("norm_vp8 = {0}", output.len() * 8);
-    }
+    pattern
 }
 
-fn norm_h265(print: bool) {
-    let mut output = Vec::with_capacity(1000);
-    {
-        let mut writer = H265Writer::new(&mut output);
-        let mut context = H265Context::default();
-        for i in 0..LOOP {
-            writer.put(pattern(i), &mut context).unwrap();
-        }
-
-        writer.finish().unwrap();
-    }
-
-    {
-        let mut reader = H265Reader::new(Cursor::new(&output)).unwrap();
-        let mut context = H265Context::default();
-        for i in 0..LOOP {
-            assert_eq!(reader.get(&mut context).unwrap(), pattern(i));
-        }
-    }
-
-    if print {
-        println!("norm_h265 = {0}", output.len() * 8);
-    }
-}
-
-fn bypass_vp8(print: bool) {
-    let mut output = Vec::with_capacity(1000);
-    {
-        let mut writer = VP8Writer::new(&mut output).unwrap();
-        for i in 0..LOOP {
-            writer.put_bypass(pattern(i)).unwrap();
-        }
-
-        writer.finish().unwrap();
-    }
-
-    {
-        let mut reader = VP8Reader::new(Cursor::new(&output)).unwrap();
-        for i in 0..LOOP {
-            assert_eq!(reader.get_bypass().unwrap(), pattern(i));
-        }
-    }
-
-    if print {
-        println!("bypass_vp8 = {0}", output.len() * 8);
-    }
-}
-
-fn bypass_h265(print: bool) {
-    let mut output = Vec::with_capacity(1000);
-    {
-        let mut writer = H265Writer::new(&mut output);
-        for i in 0..LOOP {
-            writer.put_bypass(pattern(i)).unwrap();
-        }
-
-        writer.finish().unwrap();
-    }
-
-    {
-        let mut reader = H265Reader::new(Cursor::new(&output)).unwrap();
-        for i in 0..LOOP {
-            assert_eq!(reader.get_bypass().unwrap(), pattern(i));
-        }
-    }
-
-    if print {
-        println!("bypass_h265 = {0}", output.len() * 8);
-    }
-}
+static BOOL_PATTERN: [bool; 10240] = gen_pattern();
 
 fn main() {
-    for i in 0..1024 {
-        bypass_h265(i == 1023);
-        bypass_vp8(i == 1023);
-        norm_h265(i == 1023);
-        norm_vp8(i == 1023);
+    for i in 0..100000 {
+        let v = vp8_put_pattern(false, &BOOL_PATTERN);
+        let o = vp8_get_pattern(false, &BOOL_PATTERN, &v);
+        if i == 0 {
+            assert!(o[..] == BOOL_PATTERN);
+        }
+
+        let v = rans32_put_pattern(false, &BOOL_PATTERN);
+        let o = rans32_get_pattern(false, &BOOL_PATTERN, &v);
+        if i == 0 {
+            assert!(o[..] == BOOL_PATTERN);
+        }
     }
 }
