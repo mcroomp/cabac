@@ -1,7 +1,8 @@
 use cabac::perf::{
-    h265_get_pattern, h265_get_pattern_bypass, h265_put_pattern, h265_put_pattern_bypass,
-    rans32_get_pattern, rans32_get_pattern_bypass, rans32_put_pattern, rans32_put_pattern_bypass,
-    vp8_get_pattern, vp8_get_pattern_bypass, vp8_put_pattern, vp8_put_pattern_bypass,
+    fpaq_get_pattern, fpaq_put_pattern, h265_get_pattern, h265_get_pattern_bypass,
+    h265_put_pattern, h265_put_pattern_bypass, rans32_get_pattern, rans32_get_pattern_bypass,
+    rans32_put_pattern, rans32_put_pattern_bypass, vp8_get_pattern, vp8_get_pattern_bypass,
+    vp8_put_pattern, vp8_put_pattern_bypass,
 };
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -15,6 +16,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let rans_pattern = rans32_put_pattern(&pattern);
     let vp8_pattern = vp8_put_pattern(&pattern);
     let h265_pattern = h265_put_pattern(&pattern);
+    let fpaq_pattern = fpaq_put_pattern(&pattern);
 
     let rans_pattern_bypass = rans32_put_pattern_bypass(&pattern);
     let vp8_pattern_bypass = vp8_put_pattern_bypass(&pattern);
@@ -53,6 +55,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("Rans32 write", |b| {
         b.iter(|| {
             rans32_put_pattern(&pattern);
+        })
+    });
+
+    c.bench_function("Fpaq write", |b| {
+        b.iter(|| {
+            fpaq_put_pattern(&pattern);
+        })
+    });
+
+    c.bench_function("Fpaq read", |b| {
+        b.iter(|| {
+            fpaq_get_pattern(&pattern, &fpaq_pattern);
         })
     });
 

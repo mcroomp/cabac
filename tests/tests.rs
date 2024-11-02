@@ -1,5 +1,6 @@
 use std::io::Cursor;
 
+use cabac::fpaq0p::{Fpaq0Decoder, Fpaq0Encoder};
 use cabac::h265::{H265Reader, H265Writer};
 use cabac::rans32::{RansReader32, RansWriter32};
 use cabac::traits::{CabacReader, CabacWriter, GetInnerBuffer};
@@ -64,6 +65,8 @@ fn end_to_end<
             }
         }
     }
+
+    println!("scheme: {} len: {}", scheme, writer.inner_buffer().len());
 }
 
 fn test_seq_vp8(seq: &[Seq]) {
@@ -97,6 +100,13 @@ fn test_all(seq: &[Seq]) {
     test_seq_vp8(seq);
     test_seq_h265(seq);
     test_seq_rans(seq);
+
+    end_to_end(
+        seq,
+        || Fpaq0Encoder::new(Vec::new()),
+        |buf| Fpaq0Decoder::new(Cursor::new(buf)).unwrap(),
+        "Fpaq",
+    );
 }
 
 #[test]
@@ -149,10 +159,10 @@ fn test_random_sequences() {
         0.001, 0.01, 0.1, 0.11, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9, 0.91, 0.99, 0.999, 0.9999, 1.0,
     ];
 
-    for _ in 1..1000 {
+    for _ in 1..10 {
         let mut seq = Vec::new();
 
-        for _ in 0..1000 {
+        for _ in 0..100000 {
             let ctx = rng.gen_range(0..16);
 
             seq.push(match rng.gen_range(0..4) {

@@ -1,6 +1,7 @@
 use std::io::Cursor;
 
 use crate::{
+    fpaq0p::{Fpaq0Decoder, Fpaq0Encoder},
     h265::{H265Reader, H265Writer},
     rans32::{RansReader32, RansWriter32},
     traits::{CabacReader, CabacWriter, GetInnerBuffer},
@@ -172,4 +173,18 @@ pub fn h265_get_pattern_bypass(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
 fn h264_test_pattern() {
     generic_test_pattern(h265_get_pattern, h265_put_pattern);
     generic_test_pattern(h265_get_pattern_bypass, h265_put_pattern_bypass);
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn fpaq_put_pattern(pattern: &[bool]) -> Vec<u8> {
+    generic_put_pattern(false, pattern, || Fpaq0Encoder::new(Vec::new()))
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn fpaq_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    generic_get_pattern(false, pattern, source, |vec| {
+        Fpaq0Decoder::new(Cursor::new(vec)).unwrap()
+    })
 }
