@@ -28,11 +28,35 @@ impl<R: Read> Fpaq0Decoder<R> {
             x,
         })
     }
+
+    fn fill_bits(&mut self) -> Result<()> {
+        while 0 == ((self.xl ^ self.xr) & 0xFF00_0000) {
+            self.xl <<= 8;
+            self.xr = (self.xr << 8) | 0x0000_00FF;
+
+            let mut b = [0u8];
+            let _ = self.inner_reader.read(&mut b)?;
+
+            self.x = (self.x << 8) | u32::from(b[0]);
+        }
+        Ok(())
+    }
 }
 
 impl<R: Read> CabacReader<VP8Context> for Fpaq0Decoder<R> {
     fn get_bypass(&mut self) -> Result<bool> {
-        self.get(&mut VP8Context::default())
+        let xm = self.xl + (((self.xr - self.xl) & 0xffffff00) >> 1);
+        let mut bit = true;
+        if self.x <= xm {
+            bit = false;
+            self.xr = xm;
+        } else {
+            self.xl = xm + 1;
+        }
+
+        self.fill_bits()?;
+
+        Ok(bit)
     }
 
     fn get(&mut self, cur_ctx: &mut VP8Context) -> Result<bool> {
@@ -47,15 +71,7 @@ impl<R: Read> CabacReader<VP8Context> for Fpaq0Decoder<R> {
 
         cur_ctx.record_and_update_bit(bit);
 
-        while 0 == ((self.xl ^ self.xr) & 0xFF00_0000) {
-            self.xl <<= 8;
-            self.xr = (self.xr << 8) | 0x0000_00FF;
-
-            let mut b = [0u8];
-            let _ = self.inner_reader.read(&mut b)?;
-
-            self.x = (self.x << 8) | u32::from(b[0]);
-        }
+        self.fill_bits()?;
 
         Ok(bit)
     }
@@ -111,7 +127,17 @@ impl<W: Write> CabacWriter<VP8Context> for Fpaq0Encoder<W> {
     }
 
     fn put_bypass(&mut self, bit: bool) -> Result<()> {
-        self.put(bit, &mut VP8Context::default())
+        let xm = self.xl + (((self.xr - self.xl) & 0xffffff00) >> 1);
+
+        // left/lower part of the interval corresponds to zero
+
+        if !bit {
+            self.xr = xm;
+        } else {
+            self.xl = xm + 1;
+        }
+
+        self.flush_bits()
     }
 
     fn finish(&mut self) -> Result<()> {
