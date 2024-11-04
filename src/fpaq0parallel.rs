@@ -113,6 +113,11 @@ impl std::fmt::Debug for Fpaq0DecoderParallelSimd {
     }
 }
 
+fn bitmask(x: u32x4) -> u32 {
+    let x: wide::i32x4 = bytemuck::cast(x);
+    x.move_mask() as u32
+}
+
 impl Fpaq0DecoderParallelSimd {
     pub fn new(reader: &mut impl Read) -> Result<Self> {
         let mut x = [0u32; 4];
@@ -132,15 +137,39 @@ impl Fpaq0DecoderParallelSimd {
         })
     }
 
-    fn fill_bits(&mut self, reader: &mut impl Read, i: usize) -> Result<()> {
-        while 0 == ((self.xl.as_array_ref()[i] ^ self.xr.as_array_ref()[i]) & 0xFF00_0000) {
-            self.xl.as_array_mut()[i] <<= 8;
-            self.xr.as_array_mut()[i] = (self.xr.as_array_ref()[i] << 8) | 0x0000_00FF;
+    fn fill_bits(&mut self, reader: &mut impl Read) -> Result<()> {
+        let c = (self.xl ^ self.xr).cmp_gt(u32x4::splat(0x00FF_FFFF));
+        let bm = bitmask(c);
+        if bm == 15 {
+            return Ok(());
+        }
 
-            let mut b = [0u8];
-            let _ = reader.read_exact(&mut b)?;
+        for i in 0..4 {
+            if bm & (1 << i) != 0 {
+                continue;
+            }
 
-            self.x.as_array_mut()[i] = (self.x.as_array_ref()[i] << 8) | u32::from(b[0]);
+            let mut xl = self.xl.as_array_ref()[i];
+            let mut xr = self.xr.as_array_ref()[i];
+            let mut x = self.x.as_array_ref()[i];
+
+            loop {
+                if (xl ^ xr) > 0x00FF_FFFF {
+                    break;
+                }
+
+                xl <<= 8;
+                xr = (xr << 8) | 0x0000_00FF;
+
+                let mut b = [0u8];
+                let _ = reader.read_exact(&mut b)?;
+
+                x = (x << 8) | u32::from(b[0]);
+            }
+
+            self.xl.as_array_mut()[i] = xl;
+            self.xr.as_array_mut()[i] = xr;
+            self.x.as_array_mut()[i] = x;
         }
         Ok(())
     }
@@ -160,19 +189,26 @@ impl Fpaq0DecoderParallelSimd {
                     u32::from(cur_ctx[3].get_probability().get()),
                 ]);
 
-        let mut bit = [true; 4];
-        for i in 0..4 {
-            if self.x.as_array_mut()[i] <= xm.as_array_ref()[i] {
-                bit[i] = false;
-                self.xr.as_array_mut()[i] = xm.as_array_ref()[i];
-            } else {
-                self.xl.as_array_mut()[i] = xm.as_array_ref()[i] + 1;
-            }
+        let cmp = xm.cmp_lt(self.x);
 
-            cur_ctx[i].record_and_update_bit(bit[i]);
+        self.xr = cmp.blend(self.xr, xm);
+        self.xl = cmp.blend(xm + 1, self.xl);
 
-            self.fill_bits(reader, i)?;
-        }
+        let bitmask = bitmask(cmp);
+
+        let bit = [
+            bitmask & 1 != 0,
+            bitmask & 2 != 0,
+            bitmask & 4 != 0,
+            bitmask & 8 != 0,
+        ];
+
+        cur_ctx[0].record_and_update_bit(bit[0]);
+        cur_ctx[1].record_and_update_bit(bit[1]);
+        cur_ctx[2].record_and_update_bit(bit[2]);
+        cur_ctx[3].record_and_update_bit(bit[3]);
+
+        self.fill_bits(reader)?;
 
         Ok(bit)
     }
@@ -442,7 +478,7 @@ fn simd_test() {
             Fpaq0EncoderParallel::new(&mut output, 3),
         ];
 
-        for i in 0i32..1024 {
+        for i in 0i32..10240 {
             encoders[0]
                 .put((i % 47) != 0, &mut context[0], &mut output)
                 .unwrap();
@@ -477,7 +513,7 @@ fn simd_test() {
 
         let mut decoder = Fpaq0DecoderParallelSimd::new(&mut reader).unwrap();
 
-        for i in 0..1024 {
+        for i in 0..10240 {
             let bits = decoder.get(&mut context, &mut reader).unwrap();
 
             assert_eq!(bits[0], (i % 47) != 0);

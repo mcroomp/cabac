@@ -1,4 +1,5 @@
 use cabac::perf::{
+    fpaq_parallel_get_pattern, fpaq_parallel_put_pattern, fpaq_parallel_simd_get_pattern,
     rans32_get_pattern, rans32_get_pattern_bypass, rans32_put_pattern, rans32_put_pattern_bypass,
     vp8_get_pattern, vp8_put_pattern,
 };
@@ -83,7 +84,7 @@ static BOOL_PATTERN: [bool; 10240] = gen_pattern();
 
 fn main() {
     for i in 0..100000 {
-        let v = vp8_put_pattern(&BOOL_PATTERN);
+        /*let v = vp8_put_pattern(&BOOL_PATTERN);
         let o = vp8_get_pattern(&BOOL_PATTERN, &v);
         if i == 0 {
             assert!(o[..] == BOOL_PATTERN);
@@ -97,6 +98,16 @@ fn main() {
 
         let v = rans32_put_pattern_bypass(&BOOL_PATTERN);
         let o = rans32_get_pattern_bypass(&BOOL_PATTERN, &v);
+        if i == 0 {
+            assert!(o[..] == BOOL_PATTERN);
+        }*/
+
+        let v = fpaq_parallel_put_pattern(&BOOL_PATTERN);
+        let o = fpaq_parallel_get_pattern(&BOOL_PATTERN, &v);
+        if i == 0 {
+            assert!(o[..] == BOOL_PATTERN);
+        }
+        let o = fpaq_parallel_simd_get_pattern(&BOOL_PATTERN, &v);
         if i == 0 {
             assert!(o[..] == BOOL_PATTERN);
         }
