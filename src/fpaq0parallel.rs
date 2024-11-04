@@ -11,7 +11,13 @@
 /// as you read them back in the same order.
 ///
 /// This gives you many of the advantages of rANS decoding without the need to do everything in reverse, and also
-/// the encoding doesn't require any divide/mod ops like rANS does.
+/// the encoding doesn't require any divide/mod ops like rANS does. It does require a bit more memory with the future
+/// buffer, but as long as the use of the contexts is fairly balanced, it should be a good tradeoff. ie don't do this:
+///
+///  for i in 0..100000 {
+///   context1.put(bit, &mut output);
+///  }
+///  context2.put(bit,&mut output);
 ///
 /// Parallelization implements the idea from:
 /// P. G. Howard, "Interleaving entropy codes," Proceedings. Compression and Complexity of SEQUENCES 1997
@@ -300,6 +306,9 @@ fn bypass_dual() {
         encoder1.finish(&mut output).unwrap();
         encoder2.finish(&mut output).unwrap();
         encoder3.finish(&mut output).unwrap();
+
+        // nothing should be left to write
+        assert!(output.future_output.is_empty());
     }
 
     {
