@@ -17,6 +17,7 @@ debug=true
 [dependencies]
 byteorder = "1.4"
 bytemuck = "1.11"
+wide = "0.7"
 
 [dev-dependencies]
 criterion = "0.5"
