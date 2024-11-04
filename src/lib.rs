@@ -6,6 +6,8 @@
 #![forbid(deprecated_in_future)]
 
 pub mod debug;
+pub mod fpaq0;
+pub mod fpaq0parallel;
 pub mod h265;
 pub mod perf;
 pub mod rans32;
