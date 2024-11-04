@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use cabac::fpaq0p::{Fpaq0Decoder, Fpaq0Encoder};
+use cabac::fpaq0::{Fpaq0Decoder, Fpaq0Encoder};
 use cabac::h265::{H265Reader, H265Writer};
 use cabac::rans32::{RansReader32, RansWriter32};
 use cabac::traits::{CabacReader, CabacWriter, GetInnerBuffer};

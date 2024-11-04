@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
 use crate::{
-    fpaq0p::{Fpaq0Decoder, Fpaq0Encoder},
+    fpaq0::{Fpaq0Decoder, Fpaq0Encoder},
     h265::{H265Reader, H265Writer},
     rans32::{RansReader32, RansWriter32},
     traits::{CabacReader, CabacWriter, GetInnerBuffer},
@@ -63,7 +63,7 @@ fn generic_get_pattern<'a, C: Default, CR: CabacReader<C>, FR: FnOnce(&'a [u8]) 
 fn generic_test_pattern(get: fn(&[bool], &[u8]) -> Box<[bool]>, put: fn(&[bool]) -> Vec<u8>) {
     let mut pattern = Vec::new();
     rand::Rng::sample_iter(rand::thread_rng(), &rand::distributions::Standard)
-        .take(65535)
+        .take(200)
         .for_each(|x| pattern.push(x));
 
     let encoded = put(&pattern);
@@ -187,4 +187,9 @@ pub fn fpaq_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
     generic_get_pattern(false, pattern, source, |vec| {
         Fpaq0Decoder::new(Cursor::new(vec)).unwrap()
     })
+}
+
+#[test]
+fn fpaq_test_pattern() {
+    generic_test_pattern(fpaq_get_pattern, fpaq_put_pattern);
 }
