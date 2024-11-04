@@ -1,8 +1,21 @@
-/// Special verison of FPaq0 that allows for parallel encoding and decoding. There is some overhead on the encoding
+/// Special version of FPaq0 that allows for parallel encoding and decoding. There is some overhead on the encoding
 /// side since we need to track the future output byte locations so that the reader can read them back without any
 /// special signalling.
+/// 
+/// Original algorithm developed by Matt Mahoney https://mattmahoney.net/dc/fpaq0.cpp
+/// 
+/// I like this implementation since it has no carry processing compared to other arithmetic encoders and the bytes 
+/// align exactly with reads and writes. This makes it especially suitable for this kind of parallel encoding and decoding.
 ///
-/// As long as you exactly match your puts and gets, you can even put bytes of any data in the middle of the stream
+/// As long as you exactly match your puts and gets, you can even put bytes in the middle of the stream, as long
+/// as you read them back in the same order.
+///
+/// This gives you many of the advantages of rANS decoding without the need to reverse the buffer.
+/// 
+/// Parallelization implements the idea from:
+/// P. G. Howard, "Interleaving entropy codes," Proceedings. Compression and Complexity of SEQUENCES 1997
+///  (Cat. No.97TB100171), Salerno, Italy, 1997, pp. 45-55, doi: 10.1109/SEQUEN.1997.666902.
+
 use crate::vp8::VP8Context;
 use std::{
     collections::VecDeque,
@@ -56,6 +69,7 @@ impl Fpaq0DecoderParallel {
         Ok(())
     }
 
+    /// reads a bit from the stream given a certain probability context
     pub fn get(&mut self, cur_ctx: &mut VP8Context, reader: &mut impl Read) -> Result<bool> {
         let xm = self.xl + ((self.xr - self.xl) >> 8) * u32::from(cur_ctx.get_probability().get());
         let mut bit = true;
@@ -80,14 +94,16 @@ enum FutureOutputType {
     Commit(u8),
 }
 
-pub struct OutputEncoder<W> {
+/// This holds the output and stitches together the future output in the right
+/// order so that the reader can read it back without any special signalling.
+pub struct EncoderOutput<W> {
     future_output: VecDeque<FutureOutputType>,
     output: W,
 }
 
-impl<W: Write> OutputEncoder<W> {
+impl<W: Write> EncoderOutput<W> {
     pub fn new(output: W) -> Self {
-        OutputEncoder {
+        EncoderOutput {
             future_output: VecDeque::new(),
             output,
         }
@@ -127,7 +143,7 @@ impl std::fmt::Debug for Fpaq0EncoderParallel {
 }
 
 impl Fpaq0EncoderParallel {
-    pub fn new<W: Write>(output: &mut OutputEncoder<W>, id: u8) -> Self {
+    pub fn new<W: Write>(output: &mut EncoderOutput<W>, id: u8) -> Self {
         for _i in 0..4 {
             output
                 .future_output
@@ -141,10 +157,12 @@ impl Fpaq0EncoderParallel {
         }
     }
 
+    /// writes a byte to the steam in its reserved location. If repush is true, it will
+    /// reserve a new location for the next byte.
     fn flush_byte<W: Write>(
         &mut self,
         byte: u8,
-        output: &mut OutputEncoder<W>,
+        output: &mut EncoderOutput<W>,
         repush: bool,
     ) -> Result<()> {
         for x in output.future_output.iter_mut() {
@@ -165,7 +183,7 @@ impl Fpaq0EncoderParallel {
         Ok(())
     }
 
-    fn flush_bits<W: Write>(&mut self, writer: &mut OutputEncoder<W>) -> Result<()> {
+    fn flush_bits<W: Write>(&mut self, writer: &mut EncoderOutput<W>) -> Result<()> {
         while 0 == ((self.xl ^ self.xr) & 0xFF00_0000) {
             let byte = (self.xr >> 24) as u8;
 
@@ -181,7 +199,7 @@ impl Fpaq0EncoderParallel {
         &mut self,
         bit: bool,
         branch: &mut VP8Context,
-        writer: &mut OutputEncoder<W>,
+        writer: &mut EncoderOutput<W>,
     ) -> Result<()> {
         let xm = self.xl + ((self.xr - self.xl) >> 8) * u32::from(branch.get_probability().get());
 
@@ -198,7 +216,7 @@ impl Fpaq0EncoderParallel {
         self.flush_bits(writer)
     }
 
-    pub fn finish<W: Write>(&mut self, writer: &mut OutputEncoder<W>) -> Result<()> {
+    pub fn finish<W: Write>(&mut self, writer: &mut EncoderOutput<W>) -> Result<()> {
         let mut byte = (self.xr >> 24) as u8;
 
         for _ in 0..4 {
@@ -214,7 +232,7 @@ impl Fpaq0EncoderParallel {
 fn bypass_byte() {
     use byteorder::ReadBytesExt;
 
-    let mut output = OutputEncoder {
+    let mut output = EncoderOutput {
         future_output: VecDeque::new(),
         output: Vec::new(),
     };
@@ -255,7 +273,7 @@ fn bypass_byte() {
 
 #[test]
 fn bypass_dual() {
-    let mut output = OutputEncoder {
+    let mut output = EncoderOutput {
         future_output: VecDeque::new(),
         output: Vec::new(),
     };
