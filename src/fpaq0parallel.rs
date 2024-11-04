@@ -1,21 +1,21 @@
 /// Special version of FPaq0 that allows for parallel encoding and decoding. There is some overhead on the encoding
 /// side since we need to track the future output byte locations so that the reader can read them back without any
 /// special signalling.
-/// 
+///
 /// Original algorithm developed by Matt Mahoney https://mattmahoney.net/dc/fpaq0.cpp
-/// 
-/// I like this implementation since it has no carry processing compared to other arithmetic encoders and the bytes 
+///
+/// I like this implementation since it has no carry processing compared to other arithmetic encoders and the bytes
 /// align exactly with reads and writes. This makes it especially suitable for this kind of parallel encoding and decoding.
 ///
 /// As long as you exactly match your puts and gets, you can even put bytes in the middle of the stream, as long
 /// as you read them back in the same order.
 ///
-/// This gives you many of the advantages of rANS decoding without the need to reverse the buffer.
-/// 
+/// This gives you many of the advantages of rANS decoding without the need to do everything in reverse, and also
+/// the encoding doesn't require any divide/mod ops like rANS does.
+///
 /// Parallelization implements the idea from:
 /// P. G. Howard, "Interleaving entropy codes," Proceedings. Compression and Complexity of SEQUENCES 1997
 ///  (Cat. No.97TB100171), Salerno, Italy, 1997, pp. 45-55, doi: 10.1109/SEQUEN.1997.666902.
-
 use crate::vp8::VP8Context;
 use std::{
     collections::VecDeque,
