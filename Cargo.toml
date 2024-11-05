@@ -8,6 +8,8 @@ readme = "README.md"
 repository = "https://github.com/mcroomp/cabac"
 license = "LGPL-3.0-or-later"
 exclude = [ "tests/*" ]
+categories = ["compression", "multimedia::encoding"]
+keywords = ["cabac", "arithmetic-coding", "lossless", "compression"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
