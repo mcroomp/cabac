@@ -1,8 +1,11 @@
+#[cfg(feature = "simd")]
+use cabac::perf::fpaq_parallel_simd_get_pattern;
+
 use cabac::perf::{
-    fpaq_get_pattern, fpaq_put_pattern, h265_get_pattern, h265_get_pattern_bypass,
-    h265_put_pattern, h265_put_pattern_bypass, rans32_get_pattern, rans32_get_pattern_bypass,
-    rans32_put_pattern, rans32_put_pattern_bypass, vp8_get_pattern, vp8_get_pattern_bypass,
-    vp8_put_pattern, vp8_put_pattern_bypass,
+    fpaq_get_pattern, fpaq_parallel_get_pattern, fpaq_parallel_put_pattern, fpaq_put_pattern,
+    h265_get_pattern, h265_get_pattern_bypass, h265_put_pattern, h265_put_pattern_bypass,
+    rans32_get_pattern, rans32_get_pattern_bypass, rans32_put_pattern, rans32_put_pattern_bypass,
+    vp8_get_pattern, vp8_get_pattern_bypass, vp8_put_pattern, vp8_put_pattern_bypass,
 };
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -17,6 +20,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let vp8_pattern = vp8_put_pattern(&pattern);
     let h265_pattern = h265_put_pattern(&pattern);
     let fpaq_pattern = fpaq_put_pattern(&pattern);
+    let fpaq_parallel_pattern = fpaq_parallel_put_pattern(&pattern);
 
     let rans_pattern_bypass = rans32_put_pattern_bypass(&pattern);
     let vp8_pattern_bypass = vp8_put_pattern_bypass(&pattern);
@@ -85,6 +89,25 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("H265 write", |b| {
         b.iter(|| {
             h265_put_pattern(&pattern);
+        })
+    });
+
+    c.bench_function("Fpaq0 parallel write", |b| {
+        b.iter(|| {
+            fpaq_parallel_put_pattern(&pattern);
+        })
+    });
+
+    c.bench_function("Fpaq0 parallel read", |b| {
+        b.iter(|| {
+            fpaq_parallel_get_pattern(&pattern, &fpaq_parallel_pattern);
+        })
+    });
+
+    #[cfg(feature = "simd")]
+    c.bench_function("Fpaq0 parallel simd read", |b| {
+        b.iter(|| {
+            fpaq_parallel_simd_get_pattern(&pattern, &fpaq_parallel_pattern);
         })
     });
 }

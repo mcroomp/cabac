@@ -1,6 +1,11 @@
+#[cfg(feature = "simd")]
+use cabac::perf::fpaq_parallel_simd_get_pattern;
+
 use cabac::perf::{
-    rans32_get_pattern, rans32_get_pattern_bypass, rans32_put_pattern, rans32_put_pattern_bypass,
-    vp8_get_pattern, vp8_put_pattern,
+    fpaq_parallel_get_pattern, fpaq_parallel_put_pattern, h265_get_pattern,
+    h265_get_pattern_bypass, h265_put_pattern, h265_put_pattern_bypass, rans32_get_pattern,
+    rans32_get_pattern_bypass, rans32_put_pattern, rans32_put_pattern_bypass, vp8_get_pattern,
+    vp8_put_pattern,
 };
 
 /// Generates the next pseudo-random number.
@@ -82,23 +87,82 @@ const fn gen_pattern() -> [bool; 10240] {
 static BOOL_PATTERN: [bool; 10240] = gen_pattern();
 
 fn main() {
+    let mut vp8 = false;
+    let mut rans = false;
+    let mut fpaq = false;
+    let mut h264 = false;
+
+    // parse args to see which options to run
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "vp8" => vp8 = true,
+            "rans" => rans = true,
+            "fpaq" => fpaq = true,
+            "h264" => h264 = true,
+            "all" => {
+                vp8 = true;
+                rans = true;
+                fpaq = true;
+                h264 = true;
+            }
+            _ => {
+                eprintln!("Unknown option: {}", arg);
+                std::process::exit(1);
+            }
+        }
+    }
+
     for i in 0..100000 {
-        let v = vp8_put_pattern(&BOOL_PATTERN);
-        let o = vp8_get_pattern(&BOOL_PATTERN, &v);
-        if i == 0 {
-            assert!(o[..] == BOOL_PATTERN);
+        if vp8 {
+            let v = vp8_put_pattern(&BOOL_PATTERN);
+            let o = vp8_get_pattern(&BOOL_PATTERN, &v);
+            if i == 0 {
+                assert!(o[..] == BOOL_PATTERN);
+            }
         }
 
-        let v = rans32_put_pattern(&BOOL_PATTERN);
-        let o = rans32_get_pattern(&BOOL_PATTERN, &v);
-        if i == 0 {
-            assert!(o[..] == BOOL_PATTERN);
+        if rans {
+            let v = rans32_put_pattern(&BOOL_PATTERN);
+            let o = rans32_get_pattern(&BOOL_PATTERN, &v);
+            if i == 0 {
+                assert!(o[..] == BOOL_PATTERN);
+            }
+
+            let v = rans32_put_pattern_bypass(&BOOL_PATTERN);
+            let o = rans32_get_pattern_bypass(&BOOL_PATTERN, &v);
+            if i == 0 {
+                assert!(o[..] == BOOL_PATTERN);
+            }
         }
 
-        let v = rans32_put_pattern_bypass(&BOOL_PATTERN);
-        let o = rans32_get_pattern_bypass(&BOOL_PATTERN, &v);
-        if i == 0 {
-            assert!(o[..] == BOOL_PATTERN);
+        if h264 {
+            let v = h265_put_pattern(&BOOL_PATTERN);
+            let o = h265_get_pattern(&BOOL_PATTERN, &v);
+            if i == 0 {
+                assert!(o[..] == BOOL_PATTERN);
+            }
+
+            let v = h265_put_pattern_bypass(&BOOL_PATTERN);
+            let o = h265_get_pattern_bypass(&BOOL_PATTERN, &v);
+            if i == 0 {
+                assert!(o[..] == BOOL_PATTERN);
+            }
+        }
+
+        if fpaq {
+            let v = fpaq_parallel_put_pattern(&BOOL_PATTERN);
+            let o = fpaq_parallel_get_pattern(&BOOL_PATTERN, &v);
+            if i == 0 {
+                assert!(o[..] == BOOL_PATTERN);
+            }
+
+            #[cfg(feature = "simd")]
+            {
+                let o = fpaq_parallel_simd_get_pattern(&BOOL_PATTERN, &v);
+                if i == 0 {
+                    assert!(o[..] == BOOL_PATTERN);
+                }
+            }
         }
     }
 }

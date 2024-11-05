@@ -29,15 +29,20 @@ impl<R: Read> Fpaq0Decoder<R> {
         })
     }
 
-    fn fill_bits(&mut self) -> Result<()> {
-        while 0 == ((self.xl ^ self.xr) & 0xFF00_0000) {
-            self.xl <<= 8;
-            self.xr = (self.xr << 8) | 0x0000_00FF;
+    fn fill_bits(
+        xl: &mut u32,
+        xr: &mut u32,
+        x: &mut u32,
+        inner_reader: &mut impl Read,
+    ) -> Result<()> {
+        while 0 == ((*xl ^ *xr) & 0xFF00_0000) {
+            *xl <<= 8;
+            *xr = (*xr << 8) | 0x0000_00FF;
 
             let mut b = [0u8];
-            let _ = self.inner_reader.read(&mut b)?;
+            let _ = inner_reader.read_exact(&mut b)?;
 
-            self.x = (self.x << 8) | u32::from(b[0]);
+            *x = (*x << 8) | u32::from(b[0]);
         }
         Ok(())
     }
@@ -45,33 +50,48 @@ impl<R: Read> Fpaq0Decoder<R> {
 
 impl<R: Read> CabacReader<VP8Context> for Fpaq0Decoder<R> {
     fn get_bypass(&mut self) -> Result<bool> {
-        let xm = self.xl + (((self.xr - self.xl) & 0xffffff00) >> 1);
+        let mut xl = self.xl;
+        let mut xr = self.xr;
+
+        let xm = xl + (((xr - xl) & 0xffffff00) >> 1);
         let mut bit = true;
         if self.x <= xm {
             bit = false;
-            self.xr = xm;
+            xr = xm;
         } else {
-            self.xl = xm + 1;
+            xl = xm + 1;
         }
 
-        self.fill_bits()?;
+        Self::fill_bits(&mut xl, &mut xr, &mut self.x, &mut self.inner_reader)?;
+
+        self.xl = xl;
+        self.xr = xr;
 
         Ok(bit)
     }
 
     fn get(&mut self, cur_ctx: &mut VP8Context) -> Result<bool> {
-        let xm = self.xl + ((self.xr - self.xl) >> 8) * u32::from(cur_ctx.get_probability().get());
+        let mut xl = self.xl;
+        let mut xr = self.xr;
+        let mut x = self.x;
+
+        let xm = xl + ((xr - xl) >> 8) * u32::from(cur_ctx.get_probability().get());
+
         let mut bit = true;
-        if self.x <= xm {
+        if x <= xm {
+            xr = xm;
             bit = false;
-            self.xr = xm;
         } else {
-            self.xl = xm + 1;
+            xl = xm + 1;
         }
 
         cur_ctx.record_and_update_bit(bit);
 
-        self.fill_bits()?;
+        Self::fill_bits(&mut xl, &mut xr, &mut x, &mut self.inner_reader)?;
+
+        self.xl = xl;
+        self.xr = xr;
+        self.x = x;
 
         Ok(bit)
     }
@@ -98,12 +118,12 @@ impl<W: Write> Fpaq0Encoder<W> {
         }
     }
 
-    fn flush_bits(&mut self) -> Result<()> {
-        while 0 == ((self.xl ^ self.xr) & 0xFF00_0000) {
-            let byte = (self.xr >> 24) as u8;
-            self.inner_writer.write_all(&[byte])?;
-            self.xl <<= 8;
-            self.xr = (self.xr << 8) | 0x0000_00FF;
+    fn flush_bits(xl: &mut u32, xr: &mut u32, inner_writer: &mut impl Write) -> Result<()> {
+        while 0 == ((*xl ^ *xr) & 0xFF00_0000) {
+            let byte = (*xr >> 24) as u8;
+            inner_writer.write_all(&[byte])?;
+            *xl <<= 8;
+            *xr = (*xr << 8) | 0x0000_00FF;
         }
         Ok(())
     }
@@ -111,37 +131,53 @@ impl<W: Write> Fpaq0Encoder<W> {
 
 impl<W: Write> CabacWriter<VP8Context> for Fpaq0Encoder<W> {
     fn put(&mut self, bit: bool, branch: &mut VP8Context) -> Result<()> {
-        let xm = self.xl + ((self.xr - self.xl) >> 8) * u32::from(branch.get_probability().get());
+        let mut xl = self.xl;
+        let mut xr = self.xr;
+
+        let xm = xl + ((xr - xl) >> 8) * u32::from(branch.get_probability().get());
 
         // left/lower part of the interval corresponds to zero
-
         if !bit {
-            self.xr = xm;
+            xr = xm;
         } else {
-            self.xl = xm + 1;
+            xl = xm + 1;
         }
 
         branch.record_and_update_bit(bit);
 
-        self.flush_bits()
+        Self::flush_bits(&mut xl, &mut xr, &mut self.inner_writer)?;
+
+        self.xl = xl;
+        self.xr = xr;
+
+        Ok(())
     }
 
     fn put_bypass(&mut self, bit: bool) -> Result<()> {
-        let xm = self.xl + (((self.xr - self.xl) & 0xffffff00) >> 1);
+        let mut xl = self.xl;
+        let mut xr = self.xr;
+
+        let xm = xl + (((xr - xl) & 0xffffff00) >> 1);
 
         // left/lower part of the interval corresponds to zero
 
         if !bit {
-            self.xr = xm;
+            xr = xm;
         } else {
-            self.xl = xm + 1;
+            xl = xm + 1;
         }
 
-        self.flush_bits()
+        Self::flush_bits(&mut xl, &mut xr, &mut self.inner_writer)?;
+
+        self.xl = xl;
+        self.xr = xr;
+
+        Ok(())
     }
 
     fn finish(&mut self) -> Result<()> {
         let byte = (self.xr >> 24) as u8;
-        self.inner_writer.write_all(&[byte])
+        self.inner_writer.write_all(&[byte])?;
+        self.inner_writer.write_all(&[0, 0, 0])
     }
 }

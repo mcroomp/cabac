@@ -1,11 +1,15 @@
 use std::io::Cursor;
 
+#[cfg(feature = "simd")]
+use crate::fpaq0parallel::Fpaq0DecoderParallelSimd;
+
 use crate::{
     fpaq0::{Fpaq0Decoder, Fpaq0Encoder},
+    fpaq0parallel::{EncoderOutput, Fpaq0DecoderParallel, Fpaq0EncoderParallel},
     h265::{H265Reader, H265Writer},
     rans32::{RansReader32, RansWriter32},
     traits::{CabacReader, CabacWriter, GetInnerBuffer},
-    vp8::{VP8Reader, VP8Writer},
+    vp8::{VP8Context, VP8Reader, VP8Writer},
 };
 
 #[inline(always)]
@@ -192,4 +196,122 @@ pub fn fpaq_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
 #[test]
 fn fpaq_test_pattern() {
     generic_test_pattern(fpaq_get_pattern, fpaq_put_pattern);
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn fpaq_parallel_put_pattern(pattern: &[bool]) -> Vec<u8> {
+    {
+        let mut context = [
+            VP8Context::default(),
+            VP8Context::default(),
+            VP8Context::default(),
+            VP8Context::default(),
+        ];
+
+        let mut outputbuffer = Vec::new();
+        let mut output = EncoderOutput::new(&mut outputbuffer);
+
+        let mut writer = [
+            Fpaq0EncoderParallel::new(&mut output, 0),
+            Fpaq0EncoderParallel::new(&mut output, 1),
+            Fpaq0EncoderParallel::new(&mut output, 2),
+            Fpaq0EncoderParallel::new(&mut output, 3),
+        ];
+
+        for p in 0..pattern.len() / 4 {
+            for i in 0..4 {
+                writer[i]
+                    .put(pattern[p * 4 + i], &mut context[i], &mut output)
+                    .unwrap();
+            }
+        }
+
+        for i in 0..4 {
+            writer[i].finish(&mut output).unwrap();
+        }
+
+        outputbuffer
+    }
+}
+
+#[cfg(feature = "simd")]
+#[inline(never)]
+#[allow(dead_code)]
+pub fn fpaq_parallel_simd_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    let mut context = [
+        VP8Context::default(),
+        VP8Context::default(),
+        VP8Context::default(),
+        VP8Context::default(),
+    ];
+
+    let pattern = pattern;
+
+    let mut output = vec![false; pattern.len()].into_boxed_slice();
+
+    let mut input = Cursor::new(source);
+
+    let mut reader = Fpaq0DecoderParallelSimd::new(&mut input).unwrap();
+
+    assert!(output.len() == pattern.len());
+    for i in 0..pattern.len() / 4 {
+        let r = reader.get(&mut context, &mut input).unwrap();
+        output[i * 4] = r[0];
+        output[i * 4 + 1] = r[1];
+        output[i * 4 + 2] = r[2];
+        output[i * 4 + 3] = r[3];
+    }
+
+    output
+}
+
+#[inline(never)]
+#[allow(dead_code)]
+pub fn fpaq_parallel_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
+    let mut context = [
+        VP8Context::default(),
+        VP8Context::default(),
+        VP8Context::default(),
+        VP8Context::default(),
+    ];
+
+    let pattern = pattern;
+
+    let mut output = vec![false; pattern.len()].into_boxed_slice();
+
+    let mut input = Cursor::new(source);
+
+    let mut reader = [
+        Fpaq0DecoderParallel::new(&mut input).unwrap(),
+        Fpaq0DecoderParallel::new(&mut input).unwrap(),
+        Fpaq0DecoderParallel::new(&mut input).unwrap(),
+        Fpaq0DecoderParallel::new(&mut input).unwrap(),
+    ];
+
+    assert!(output.len() == pattern.len());
+    for i in 0..pattern.len() / 4 {
+        let mut r = [false; 4];
+        for i in 0..4 {
+            r[i] = reader[i].get(&mut context[i], &mut input).unwrap();
+        }
+
+        output[i * 4] = r[0];
+        output[i * 4 + 1] = r[1];
+        output[i * 4 + 2] = r[2];
+        output[i * 4 + 3] = r[3];
+    }
+
+    output
+}
+
+#[cfg(feature = "simd")]
+#[test]
+fn fpaq_parallel_simd_test_pattern() {
+    generic_test_pattern(fpaq_parallel_simd_get_pattern, fpaq_parallel_put_pattern);
+}
+
+#[test]
+fn fpaq_parallel_test_pattern() {
+    generic_test_pattern(fpaq_parallel_get_pattern, fpaq_parallel_put_pattern);
 }
