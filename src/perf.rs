@@ -1,10 +1,11 @@
 use std::io::Cursor;
 
+#[cfg(feature = "simd")]
+use crate::fpaq0parallel::Fpaq0DecoderParallelSimd;
+
 use crate::{
     fpaq0::{Fpaq0Decoder, Fpaq0Encoder},
-    fpaq0parallel::{
-        EncoderOutput, Fpaq0DecoderParallel, Fpaq0DecoderParallelSimd, Fpaq0EncoderParallel,
-    },
+    fpaq0parallel::{EncoderOutput, Fpaq0DecoderParallel, Fpaq0EncoderParallel},
     h265::{H265Reader, H265Writer},
     rans32::{RansReader32, RansWriter32},
     traits::{CabacReader, CabacWriter, GetInnerBuffer},
@@ -234,6 +235,7 @@ pub fn fpaq_parallel_put_pattern(pattern: &[bool]) -> Vec<u8> {
     }
 }
 
+#[cfg(feature = "simd")]
 #[inline(never)]
 #[allow(dead_code)]
 pub fn fpaq_parallel_simd_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
@@ -303,6 +305,7 @@ pub fn fpaq_parallel_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]>
     output
 }
 
+#[cfg(feature = "simd")]
 #[test]
 fn fpaq_parallel_simd_test_pattern() {
     generic_test_pattern(fpaq_parallel_simd_get_pattern, fpaq_parallel_put_pattern);

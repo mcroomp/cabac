@@ -17,7 +17,7 @@ debug=true
 [dependencies]
 byteorder = "1.4"
 bytemuck = "1.11"
-wide = "0.7"
+wide = { version = "0.7", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -28,3 +28,8 @@ rand = "0.8"
 [[bench]]
 name = "benches"
 harness = false
+
+[features]
+# simd is still slower than non-simd... work in progress
+default = []
+simd = ["dep:wide"]
