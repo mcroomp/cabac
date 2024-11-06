@@ -255,13 +255,14 @@ pub fn fpaq_parallel_simd_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[b
     let mut reader = Fpaq0DecoderParallelSimd::new(&mut input).unwrap();
 
     assert!(output.len() == pattern.len());
-    for i in 0..pattern.len() / 4 {
+
+    output.chunks_exact_mut(4).for_each(|chunk| {
         let r = reader.get(&mut context, &mut input).unwrap();
-        output[i * 4] = r[0];
-        output[i * 4 + 1] = r[1];
-        output[i * 4 + 2] = r[2];
-        output[i * 4 + 3] = r[3];
-    }
+        chunk[0] = r & 1 != 0;
+        chunk[1] = r & 2 != 0;
+        chunk[2] = r & 4 != 0;
+        chunk[3] = r & 8 != 0;
+    });
 
     output
 }
@@ -289,18 +290,11 @@ pub fn fpaq_parallel_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]>
         Fpaq0DecoderParallel::new(&mut input).unwrap(),
     ];
 
-    assert!(output.len() == pattern.len());
-    for i in 0..pattern.len() / 4 {
-        let mut r = [false; 4];
+    output.chunks_exact_mut(4).for_each(|chunk| {
         for i in 0..4 {
-            r[i] = reader[i].get(&mut context[i], &mut input).unwrap();
+            chunk[i] = reader[i].get(&mut context[i], &mut input).unwrap();
         }
-
-        output[i * 4] = r[0];
-        output[i * 4 + 1] = r[1];
-        output[i * 4 + 2] = r[2];
-        output[i * 4 + 3] = r[3];
-    }
+    });
 
     output
 }

@@ -85,10 +85,11 @@ impl<R: Read> CabacReader<VP8Context> for Fpaq0Decoder<R> {
             xl = xm + 1;
         }
 
-        cur_ctx.record_and_update_bit(bit);
+        let b = cur_ctx.record_and_update_bit(bit);
 
         Self::fill_bits(&mut xl, &mut xr, &mut x, &mut self.inner_reader)?;
 
+        *cur_ctx = b;
         self.xl = xl;
         self.xr = xr;
         self.x = x;
@@ -143,12 +144,13 @@ impl<W: Write> CabacWriter<VP8Context> for Fpaq0Encoder<W> {
             xl = xm + 1;
         }
 
-        branch.record_and_update_bit(bit);
+        let b = branch.record_and_update_bit(bit);
 
         Self::flush_bits(&mut xl, &mut xr, &mut self.inner_writer)?;
 
         self.xl = xl;
         self.xr = xr;
+        *branch = b;
 
         Ok(())
     }

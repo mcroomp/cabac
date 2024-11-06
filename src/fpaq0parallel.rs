@@ -92,10 +92,11 @@ impl Fpaq0DecoderParallel {
             xl = xm + 1;
         }
 
-        cur_ctx.record_and_update_bit(bit);
+        let c = cur_ctx.record_and_update_bit(bit);
 
         self.fill_bits(&mut xl, &mut xr, reader)?;
 
+        *cur_ctx = c;
         self.xl = xl;
         self.xr = xr;
 
@@ -148,8 +149,14 @@ impl Fpaq0DecoderParallelSimd {
         })
     }
 
-    fn fill_bits(&mut self, reader: &mut impl Read) -> Result<()> {
-        let c = (self.xl ^ self.xr).cmp_gt(u32x4::splat(0x00FF_FFFF));
+    #[inline]
+    fn fill_bits(
+        &mut self,
+        xlw: &mut u32x4,
+        xrw: &mut u32x4,
+        reader: &mut impl Read,
+    ) -> Result<()> {
+        let c = (*xlw ^ *xrw).cmp_gt(u32x4::splat(0x00FF_FFFF));
         let bm = bitmask(c);
         if bm == 15 {
             return Ok(());
@@ -160,8 +167,8 @@ impl Fpaq0DecoderParallelSimd {
                 continue;
             }
 
-            let mut xl = self.xl.as_array_ref()[i];
-            let mut xr = self.xr.as_array_ref()[i];
+            let mut xl = xlw.as_array_ref()[i];
+            let mut xr = xrw.as_array_ref()[i];
             let mut x = self.x.as_array_ref()[i];
 
             loop {
@@ -178,19 +185,16 @@ impl Fpaq0DecoderParallelSimd {
                 x = (x << 8) | u32::from(b[0]);
             }
 
-            self.xl.as_array_mut()[i] = xl;
-            self.xr.as_array_mut()[i] = xr;
+            xlw.as_array_mut()[i] = xl;
+            xrw.as_array_mut()[i] = xr;
             self.x.as_array_mut()[i] = x;
         }
         Ok(())
     }
 
     /// reads a bit from the stream given a certain probability context
-    pub fn get(
-        &mut self,
-        cur_ctx: &mut [VP8Context; 4],
-        reader: &mut impl Read,
-    ) -> Result<[bool; 4]> {
+    #[inline(always)]
+    pub fn get(&mut self, cur_ctx: &mut [VP8Context; 4], reader: &mut impl Read) -> Result<u32> {
         let xm: u32x4 = self.xl
             + ((self.xr - self.xl) >> 8)
                 * u32x4::from([
@@ -202,26 +206,19 @@ impl Fpaq0DecoderParallelSimd {
 
         let cmp = xm.cmp_lt(self.x);
 
-        self.xr = cmp.blend(self.xr, xm);
-        self.xl = cmp.blend(xm + 1, self.xl);
+        let mut xrw = cmp.blend(self.xr, xm);
+        let mut xlw = cmp.blend(xm + 1, self.xl);
+
+        VP8Context::record_and_update_bit_wide(cur_ctx, cmp);
 
         let bitmask = bitmask(cmp);
 
-        let bit = [
-            bitmask & 1 != 0,
-            bitmask & 2 != 0,
-            bitmask & 4 != 0,
-            bitmask & 8 != 0,
-        ];
+        self.fill_bits(&mut xlw, &mut xrw, reader)?;
 
-        cur_ctx[0].record_and_update_bit(bit[0]);
-        cur_ctx[1].record_and_update_bit(bit[1]);
-        cur_ctx[2].record_and_update_bit(bit[2]);
-        cur_ctx[3].record_and_update_bit(bit[3]);
+        self.xl = xlw;
+        self.xr = xrw;
 
-        self.fill_bits(reader)?;
-
-        Ok(bit)
+        Ok(bitmask)
     }
 }
 
@@ -356,10 +353,11 @@ impl Fpaq0EncoderParallel {
             xl = xm + 1;
         }
 
-        branch.record_and_update_bit(bit);
+        let b = branch.record_and_update_bit(bit);
 
         self.flush_bits(writer, &mut xl, &mut xr)?;
 
+        *branch = b;
         self.xl = xl;
         self.xr = xr;
         Ok(())
@@ -406,7 +404,7 @@ fn bypass_byte() {
         let mut reader = std::io::Cursor::new(&outputbuffer);
 
         let mut decoder = Fpaq0DecoderParallel::new(&mut reader).unwrap();
-        for i in 0..1024 {
+        for i in 0..1024i32 {
             if i > 10 && i < 20 {
                 assert_eq!(reader.read_u8().unwrap(), i as u8);
             }
@@ -538,10 +536,10 @@ fn simd_test() {
         for i in 0..10240 {
             let bits = decoder.get(&mut context, &mut reader).unwrap();
 
-            assert_eq!(bits[0], (i % 47) != 0);
-            assert_eq!(bits[1], (i % 3) != 0);
-            assert_eq!(bits[2], (i % 5) != 0);
-            assert_eq!(bits[3], (i % 7) != 0);
+            assert_eq!(bits & 1 != 0, (i % 47) != 0);
+            assert_eq!(bits & 2 != 0, (i % 3) != 0);
+            assert_eq!(bits & 4 != 0, (i % 5) != 0);
+            assert_eq!(bits & 8 != 0, (i % 7) != 0);
         }
     }
 }

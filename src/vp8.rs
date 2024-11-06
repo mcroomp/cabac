@@ -35,6 +35,12 @@ pub struct VP8Context {
     counts: u16,
 }
 
+impl std::fmt::Debug for VP8Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "VP8Context {{ counts: {:x} }}", self.counts)
+    }
+}
+
 impl Default for VP8Context {
     /// default value is balanced between zeros or ones
     fn default() -> Self {
@@ -78,8 +84,80 @@ impl VP8Context {
         PROB_LOOKUP[self.counts as usize]
     }
 
+    #[cfg(feature = "simd")]
     #[inline(always)]
-    pub fn record_and_update_bit(&mut self, bit: bool) {
+    pub fn record_and_update_bit_wide(contexts: &mut [Self; 4], mask: wide::u32x4) {
+        use bytemuck::cast;
+        use wide::{i8x16, u32x4};
+
+        // This helper function swizzles the 4 u32 values by selecting different lanes
+        // based on the provided `select` mask.
+        #[inline(always)]
+        fn swizzle(input_values: u32x4, select_mask: i8x16) -> u32x4 {
+            // Cast the u32x4 values to i8x16, then swizzle them according to the `select_mask`
+            let byte_values: i8x16 = cast(input_values);
+            cast(byte_values.swizzle(select_mask))
+        }
+
+        // Collect the `counts` from the four contexts into a 4-element wide SIMD vector
+        let counts_as_u32 = u32x4::from([
+            contexts[0].counts as u32,
+            contexts[1].counts as u32,
+            contexts[2].counts as u32,
+            contexts[3].counts as u32,
+        ]);
+
+        // Convert the input `mask` to a 16-element wide byte vector for further processing
+        let mask_as_bytes: i8x16 = cast(mask);
+
+        // Create a `select_mask` that will be used to shuffle the `counts` values
+        // The `select_mask` is used to swap lanes of `counts_as_u32` based on the mask
+        let select_mask = mask_as_bytes.blend(
+            i8x16::from([1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14]), // Custom shuffle
+            i8x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]), // Identity shuffle
+        );
+
+        // Swizzle the `counts_as_u32` values using the `select_mask`
+        let shuffled_counts = swizzle(counts_as_u32, select_mask);
+
+        // Add a constant offset (0x100) to each count value
+        let updated_counts = shuffled_counts + u32x4::splat(0x100);
+
+        // Check if any updated count exceeds the 16-bit unsigned integer range (0xffff)
+        let overflow_detected = updated_counts.cmp_gt(u32x4::splat(0xffff));
+
+        // Check if the shuffled counts are equal to 0xff01 (special case flag)
+        let is_ff01 = shuffled_counts.cmp_eq(u32x4::splat(0xff01));
+
+        // Create a conditional mask based on `is_ff01`, adjusting counts accordingly
+        let conditional_mask = is_ff01.blend(u32x4::splat(0xff00), u32x4::splat(0x8100));
+
+        // Add 0x101 to the counts and shift them right by one bit
+        let adjusted_counts = (shuffled_counts + u32x4::splat(0x101)) >> 1;
+
+        // Final adjustment of the counts based on overflow detection and the special mask
+        let final_counts =
+            overflow_detected.blend(adjusted_counts | conditional_mask, updated_counts);
+
+        // Swizzle the final counts back using the same `select_mask`
+        let final_swizzled_counts = swizzle(final_counts, select_mask);
+
+        // Update the `counts` field of the contexts with the processed values
+        (
+            contexts[0].counts,
+            contexts[1].counts,
+            contexts[2].counts,
+            contexts[3].counts,
+        ) = (
+            final_swizzled_counts.as_array_ref()[0] as u16,
+            final_swizzled_counts.as_array_ref()[1] as u16,
+            final_swizzled_counts.as_array_ref()[2] as u16,
+            final_swizzled_counts.as_array_ref()[3] as u16,
+        );
+    }
+
+    #[inline(always)]
+    pub fn record_and_update_bit(&self, bit: bool) -> Self {
         // rotation is used to update either the true or false counter
         // this allows the same code to be used without branching,
         // which makes the CPU about 20% happier.
@@ -100,10 +178,12 @@ impl VP8Context {
             let mask = if orig == 0xff01 { 0xff00 } else { 0x8100 };
 
             // upper byte is 0 since we incremented 0xffxx so we don't have to mask it
-            sum = ((1 + sum) >> 1) | mask;
+            sum = ((orig.wrapping_add(0x101)) >> 1) | mask;
         }
 
-        self.counts = sum.rotate_left(bit as u32 * 8);
+        Self {
+            counts: sum.rotate_left(bit as u32 * 8),
+        }
     }
 }
 
@@ -132,7 +212,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
         let bit = tmp_value >= big_split;
 
         let shift;
-        branch.record_and_update_bit(bit);
+        let b = branch.record_and_update_bit(bit);
         if bit {
             tmp_range -= split;
             tmp_value -= big_split;
@@ -155,6 +235,7 @@ impl<R: Read> CabacReader<VP8Context> for VP8Reader<R> {
             shift = split.leading_zeros() as i32 - 24;
         }
 
+        *branch = b;
         self.value = tmp_value << shift;
         self.range = tmp_range << shift;
         self.count = tmp_count - shift;
@@ -341,7 +422,7 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
         let mut tmp_low_value = self.low_value;
 
         let mut shift;
-        branch.record_and_update_bit(value);
+        let b = branch.record_and_update_bit(value);
         if value {
             tmp_low_value += split;
             tmp_range -= split;
@@ -365,6 +446,7 @@ impl<W: Write> CabacWriter<VP8Context> for VP8Writer<W> {
 
         tmp_low_value <<= shift;
 
+        *branch = b;
         self.bits_left = tmp_count;
         self.low_value = tmp_low_value;
         self.range = tmp_range;
@@ -518,7 +600,7 @@ fn test_all_probabilities() {
 
         for _k in 0..10 {
             old_f.record_obs_and_update(false);
-            new_f.record_and_update_bit(false);
+            new_f = new_f.record_and_update_bit(false);
             assert_eq!(old_f.probability, new_f.get_probability().get());
         }
 
@@ -530,7 +612,7 @@ fn test_all_probabilities() {
 
         for _k in 0..10 {
             old_t.record_obs_and_update(true);
-            new_t.record_and_update_bit(true);
+            new_t = new_t.record_and_update_bit(true);
 
             if old_t.probability == 0 {
                 // there is a change of behavior here compared to the C++ version,
@@ -541,6 +623,39 @@ fn test_all_probabilities() {
             } else {
                 assert_eq!(old_t.probability, new_t.get_probability().get());
             }
+        }
+    }
+}
+
+/// ensure that all the permutations of the counts are handled correctly in the SIMD version
+#[cfg(feature = "simd")]
+#[test]
+fn test_record_and_update_bit_wide() {
+    for counts in 0..=65535u16 {
+        let mut arr1 = [
+            VP8Context { counts },
+            VP8Context { counts },
+            VP8Context { counts },
+            VP8Context { counts },
+        ];
+        arr1[0] = arr1[0].record_and_update_bit(false);
+        arr1[1] = arr1[1].record_and_update_bit(true);
+        arr1[2] = arr1[2].record_and_update_bit(false);
+        arr1[3] = arr1[3].record_and_update_bit(true);
+
+        let mut arr2 = [
+            VP8Context { counts },
+            VP8Context { counts },
+            VP8Context { counts },
+            VP8Context { counts },
+        ];
+        VP8Context::record_and_update_bit_wide(
+            &mut arr2,
+            wide::u32x4::new([0, u32::MAX, 0, u32::MAX]),
+        );
+
+        for i in 0..4 {
+            assert_eq!(arr1[i].counts, arr2[i].counts);
         }
     }
 }

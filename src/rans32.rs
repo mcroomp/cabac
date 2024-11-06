@@ -11,12 +11,6 @@ use crate::{
     vp8::VP8Context,
 };
 
-/// RansContext is just the VP8Context recycled since it does a pretty
-/// good job of efficiently keeping track of the probability state
-#[repr(transparent)]
-#[derive(Default)]
-pub struct RansContext(VP8Context);
-
 pub trait WriteU16 {
     fn write_u16(&mut self, value: u16);
 }
@@ -234,15 +228,16 @@ impl<W: Write> RansWriter32<W> {
     }
 }
 
-impl<W: Write> CabacWriter<RansContext> for RansWriter32<W> {
-    fn put(&mut self, bit: bool, branch: &mut RansContext) -> Result<()> {
-        let prob = branch.0.get_probability();
-        branch.0.record_and_update_bit(bit);
+impl<W: Write> CabacWriter<VP8Context> for RansWriter32<W> {
+    fn put(&mut self, bit: bool, branch: &mut VP8Context) -> Result<()> {
+        let prob = branch.get_probability();
+        let b = branch.record_and_update_bit(bit);
 
         if self.symbol_buffer_stack == 0 {
             self.flush()?;
         }
 
+        *branch = b;
         self.symbol_buffer_stack -= 1;
         self.symbol_buffer[self.symbol_buffer_stack] = Symbol { bit, prob };
         Ok(())
@@ -311,24 +306,25 @@ impl<R: Read> RansReader32<R> {
     }
 }
 
-impl<R: Read> CabacReader<RansContext> for RansReader32<R> {
+impl<R: Read> CabacReader<VP8Context> for RansReader32<R> {
     /// reads a bit and then swaps the rans states
-    fn get(&mut self, branch: &mut RansContext) -> Result<bool> {
+    fn get(&mut self, branch: &mut VP8Context) -> Result<bool> {
         self.check_reset_stream()?;
 
         let mut local_state = self.rans0;
         self.rans0 = self.rans1;
 
-        let prob = branch.0.get_probability();
+        let prob = branch.get_probability();
 
         let cumulative_freq = local_state.dec_get();
 
         let bit = cumulative_freq >= u32::from(prob.get());
 
-        branch.0.record_and_update_bit(bit);
+        let b = branch.record_and_update_bit(bit);
         let (start, freq) = start_freq(bit, prob);
         local_state.dec_advance(&mut self.upstream_reader, start, freq)?;
 
+        *branch = b;
         self.rans1 = local_state;
         Ok(bit)
     }
