@@ -245,19 +245,37 @@ impl<W: Write> EncoderOutput<W> {
 
     /// writes a byte to the steam in its reserved location. If repush is true, it will
     /// reserve a new location for the next byte.
-    fn flush_byte(&mut self, byte: u8, id: u8, repush: bool) -> Result<()> {
+    fn flush_byte<const REPUSH: bool>(&mut self, byte: u8, id: u8) -> Result<()> {
+        let mut first = true;
         for x in self.future_output.iter_mut() {
             if *x == id as u16 {
                 *x = byte as u16 | 0x100;
                 break;
             }
-        }
-        if repush {
-            self.future_output.push_back(id as u16);
+            first = false;
         }
 
         // empty out everything that is ready to be written
-        self.write_ready_bytes()?;
+        if first {
+            self.output.write_all(&[byte])?;
+
+            loop {
+                let _ = self.future_output.pop_front();
+
+                if let Some(&x) = self.future_output.front() {
+                    if (x & 0x100) == 0 {
+                        break;
+                    }
+                    self.output.write_all(&[x as u8])?;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if REPUSH {
+            self.future_output.push_back(id as u16);
+        }
 
         Ok(())
     }
@@ -266,21 +284,10 @@ impl<W: Write> EncoderOutput<W> {
     /// read back by the decoder without any special signalling as long
     /// as it is done in the same order as it was written
     pub fn write_bypass_byte(&mut self, byte: u8) -> Result<()> {
-        self.future_output.push_back(byte as u16 | 0x100);
-
-        self.write_ready_bytes()?;
-
-        Ok(())
-    }
-
-    fn write_ready_bytes(&mut self) -> Result<()> {
-        while let Some(&x) = self.future_output.front() {
-            if (x & 0x100) == 0 {
-                break;
-            }
-
-            self.output.write_all(&[x as u8])?;
-            let _ = self.future_output.pop_front().unwrap();
+        if self.future_output.is_empty() {
+            self.output.write_all(&[byte])?;
+        } else {
+            self.future_output.push_back(byte as u16 | 0x100);
         }
 
         Ok(())
@@ -321,7 +328,7 @@ impl Fpaq0EncoderParallel {
         while 0 == ((*xl ^ *xr) & 0xFF00_0000) {
             let byte = (*xr >> 24) as u8;
 
-            writer.flush_byte(byte, self.id, true)?;
+            writer.flush_byte::<true>(byte, self.id)?;
 
             *xl <<= 8;
             *xr = (*xr << 8) | 0x0000_00FF;
@@ -362,7 +369,7 @@ impl Fpaq0EncoderParallel {
         let mut byte = (self.xr >> 24) as u8;
 
         for _ in 0..4 {
-            writer.flush_byte(byte, self.id, false)?;
+            writer.flush_byte::<false>(byte, self.id)?;
             byte = 0;
         }
 
