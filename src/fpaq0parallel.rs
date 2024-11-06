@@ -243,6 +243,25 @@ impl<W: Write> EncoderOutput<W> {
         }
     }
 
+    /// writes a byte to the steam in its reserved location. If repush is true, it will
+    /// reserve a new location for the next byte.
+    fn flush_byte(&mut self, byte: u8, id: u8, repush: bool) -> Result<()> {
+        for x in self.future_output.iter_mut() {
+            if *x == id as u16 {
+                *x = byte as u16 | 0x100;
+                break;
+            }
+        }
+        if repush {
+            self.future_output.push_back(id as u16);
+        }
+
+        // empty out everything that is ready to be written
+        self.write_ready_bytes()?;
+
+        Ok(())
+    }
+
     /// writes a byte to the output stream in such a position that it can be
     /// read back by the decoder without any special signalling as long
     /// as it is done in the same order as it was written
@@ -293,30 +312,6 @@ impl Fpaq0EncoderParallel {
         }
     }
 
-    /// writes a byte to the steam in its reserved location. If repush is true, it will
-    /// reserve a new location for the next byte.
-    fn flush_byte<W: Write>(
-        &mut self,
-        byte: u8,
-        output: &mut EncoderOutput<W>,
-        repush: bool,
-    ) -> Result<()> {
-        for x in output.future_output.iter_mut() {
-            if *x == self.id as u16 {
-                *x = byte as u16 | 0x100;
-                break;
-            }
-        }
-        if repush {
-            output.future_output.push_back(self.id as u16);
-        }
-
-        // empty out everything that is ready to be written
-        output.write_ready_bytes()?;
-
-        Ok(())
-    }
-
     fn flush_bits<W: Write>(
         &mut self,
         writer: &mut EncoderOutput<W>,
@@ -326,7 +321,7 @@ impl Fpaq0EncoderParallel {
         while 0 == ((*xl ^ *xr) & 0xFF00_0000) {
             let byte = (*xr >> 24) as u8;
 
-            self.flush_byte(byte, writer, true)?;
+            writer.flush_byte(byte, self.id, true)?;
 
             *xl <<= 8;
             *xr = (*xr << 8) | 0x0000_00FF;
@@ -367,7 +362,7 @@ impl Fpaq0EncoderParallel {
         let mut byte = (self.xr >> 24) as u8;
 
         for _ in 0..4 {
-            self.flush_byte(byte, writer, false)?;
+            writer.flush_byte(byte, self.id, false)?;
             byte = 0;
         }
 

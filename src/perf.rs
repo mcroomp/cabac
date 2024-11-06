@@ -18,18 +18,24 @@ fn generic_put_pattern<C: Default, CW: CabacWriter<C> + GetInnerBuffer, FW: FnOn
     pattern: &[bool],
     f: FW,
 ) -> Vec<u8> {
-    let mut context = C::default();
+    let mut context = [C::default(), C::default(), C::default(), C::default()];
 
     let mut writer = f();
 
     if bypass {
-        for &b in pattern.iter() {
-            writer.put_bypass(b).unwrap();
-        }
+        pattern.chunks_exact(4).for_each(|chunk| {
+            writer.put_bypass(chunk[0]).unwrap();
+            writer.put_bypass(chunk[1]).unwrap();
+            writer.put_bypass(chunk[2]).unwrap();
+            writer.put_bypass(chunk[3]).unwrap();
+        });
     } else {
-        for &b in pattern.iter() {
-            writer.put(b, &mut context).unwrap();
-        }
+        pattern.chunks_exact(4).for_each(|chunk| {
+            writer.put(chunk[0], &mut context[0]).unwrap();
+            writer.put(chunk[1], &mut context[1]).unwrap();
+            writer.put(chunk[2], &mut context[2]).unwrap();
+            writer.put(chunk[3], &mut context[3]).unwrap();
+        });
     }
 
     writer.finish().unwrap();
@@ -43,7 +49,7 @@ fn generic_get_pattern<'a, C: Default, CR: CabacReader<C>, FR: FnOnce(&'a [u8]) 
     source: &'a [u8],
     f: FR,
 ) -> Box<[bool]> {
-    let mut context = C::default();
+    let mut context = [C::default(), C::default(), C::default(), C::default()];
 
     let mut output = vec![false; pattern.len()].into_boxed_slice();
 
@@ -51,13 +57,19 @@ fn generic_get_pattern<'a, C: Default, CR: CabacReader<C>, FR: FnOnce(&'a [u8]) 
 
     assert!(output.len() == pattern.len());
     if bypass {
-        for i in 0..pattern.len() {
-            output[i] = reader.get_bypass().unwrap();
-        }
+        output.chunks_exact_mut(4).for_each(|chunk| {
+            chunk[0] = reader.get_bypass().unwrap();
+            chunk[1] = reader.get_bypass().unwrap();
+            chunk[2] = reader.get_bypass().unwrap();
+            chunk[3] = reader.get_bypass().unwrap();
+        });
     } else {
-        for i in 0..pattern.len() {
-            output[i] = reader.get(&mut context).unwrap();
-        }
+        output.chunks_exact_mut(4).for_each(|chunk| {
+            chunk[0] = reader.get(&mut context[0]).unwrap();
+            chunk[1] = reader.get(&mut context[1]).unwrap();
+            chunk[2] = reader.get(&mut context[2]).unwrap();
+            chunk[3] = reader.get(&mut context[3]).unwrap();
+        });
     }
 
     output
