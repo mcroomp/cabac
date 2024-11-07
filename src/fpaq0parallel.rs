@@ -245,36 +245,60 @@ impl<W: Write> EncoderOutput<W> {
 
     /// writes a byte to the steam in its reserved location. If repush is true, it will
     /// reserve a new location for the next byte.
+    ///
+    /// Don't inline this because otherwise the compiler will not be able to use
+    /// as many registers in the hot loop.
+    #[cold]
     fn flush_byte<const REPUSH: bool>(&mut self, byte: u8, id: u8) -> Result<()> {
-        let mut first = true;
-        for x in self.future_output.iter_mut() {
-            if *x == id as u16 {
-                *x = byte as u16 | 0x100;
-                break;
-            }
-            first = false;
-        }
+        let slices = self.future_output.as_mut_slices();
+        assert!(!slices.0.is_empty());
 
-        // empty out everything that is ready to be written
-        if first {
+        let mut first_iter = slices.0.iter_mut();
+
+        if *first_iter.next().unwrap() == id as u16 {
+            // if the first item is the one we are looking for, then we can write it
+            // together along with the rest of the output that has been decided.
+            let _ = self.future_output.pop_front().unwrap();
+            if REPUSH {
+                self.future_output.push_back(id as u16);
+            }
+
             self.output.write_all(&[byte])?;
 
-            loop {
-                let _ = self.future_output.pop_front();
-
-                if let Some(&x) = self.future_output.front() {
-                    if (x & 0x100) == 0 {
-                        break;
-                    }
-                    self.output.write_all(&[x as u8])?;
-                } else {
+            while let Some(&x) = self.future_output.front() {
+                if (x & 0x100) == 0 {
                     break;
                 }
-            }
-        }
+                let _ = self.future_output.pop_front();
 
-        if REPUSH {
-            self.future_output.push_back(id as u16);
+                self.output.write_all(&[x as u8])?;
+            }
+        } else {
+            // otherwise we need to find a location to write the byte in the future
+            // and then push a new location at the end of the stack
+
+            while let Some(v) = first_iter.next() {
+                if *v == id as u16 {
+                    *v = byte as u16 | 0x100;
+                    if REPUSH {
+                        self.future_output.push_back(id as u16);
+                    }
+                    return Ok(());
+                }
+            }
+
+            for v in slices.1 {
+                if *v == id as u16 {
+                    *v = byte as u16 | 0x100;
+
+                    if REPUSH {
+                        self.future_output.push_back(id as u16);
+                    }
+                    return Ok(());
+                }
+            }
+
+            panic!("id not found in future output");
         }
 
         Ok(())
