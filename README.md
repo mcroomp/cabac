@@ -30,8 +30,8 @@ Here is the relative performance (in microseconds, lower is better) for encoding
 | ------------- | ---- | ----------- | ----- |
 | H264/265      | 437  | 55          | 386   |
 | VP8           | 288  | 149         | 229   |
-| rANS          | 259  | 59          | 190   |
-| Fpaq0         | 311  |             | 183   |
-| Fpaq0 parallel| 195  |             | 265   |
+| rANS          | 162  | 59          | 190   |
+| Fpaq0         | 241  |             | 177   |
+| Fpaq0 parallel| 181  |             | 247   |
 
 
