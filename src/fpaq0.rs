@@ -1,3 +1,15 @@
+/// This is an implementation of a binary arithmetic encoder based on the FPAQ0 algorithm. This arithmetic
+/// encoder has an advange over other arithmetic encoders since it *does not require carry propagation*, which
+/// simplifies the output, and also means that the output can be written byte by byte, and even written in
+/// parallel (i.e. multiple threads writing to the same output buffer) with some minor modifications (see fpaq0parallel).
+///
+/// The history of this algorithm is a bit complicated. The method for reducing range to avoid carry is was original
+/// described by:
+///
+/// F. Rubin, "Arithmetic Stream Coding Using Fixed Precision Registers",
+/// IEEE Trans. Information Theory IT-25 (6) (1979), p. 672 - 675
+///
+/// This was then rediscovered by Ilia Muraviev and Matt Mahoney in https://mattmahoney.net/dc/fpaq0.cpp
 use crate::{
     traits::{CabacReader, CabacWriter, GetInnerBuffer},
     vp8::VP8Context,
