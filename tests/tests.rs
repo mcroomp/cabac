@@ -1,10 +1,10 @@
 use std::io::Cursor;
 
-use cabac::fpaq0::{Fpaq0Decoder, Fpaq0Encoder};
-use cabac::h265::{H265Reader, H265Writer};
-use cabac::rans32::{RansReader32, RansWriter32};
-use cabac::traits::{CabacReader, CabacWriter, GetInnerBuffer};
-use cabac::vp8::{VP8Reader, VP8Writer};
+use cabac::{CabacReader, CabacWriter};
+use cabac::{Fpaq0Decoder, Fpaq0Encoder};
+use cabac::{H265Reader, H265Writer};
+use cabac::{RansReader32, RansWriter32};
+use cabac::{VP8Reader, VP8Writer};
 
 #[derive(Clone, Copy)]
 enum Seq {
@@ -12,24 +12,11 @@ enum Seq {
     Bypass(bool),
 }
 
-fn end_to_end<
-    C: Default,
-    R: CabacReader<C>,
-    W: CabacWriter<C> + GetInnerBuffer,
-    FW: Fn() -> W,
-    FR: Fn(Vec<u8>) -> R,
->(
-    seq: &[Seq],
-    write: FW,
-    read: FR,
-    scheme: &str,
-) {
+fn do_write<C: Default, CW: CabacWriter<C>>(seq: &[Seq], mut writer: CW) {
     let mut context = Vec::new();
     for _i in 0..16 {
         context.push(C::default());
     }
-
-    let mut writer = write();
 
     for &s in seq {
         match s {
@@ -39,74 +26,65 @@ fn end_to_end<
     }
 
     writer.finish().unwrap();
+}
 
-    let mut context = Vec::new();
-    for _ in 0..16 {
-        context.push(C::default());
-    }
+fn do_read<C: Default, CR: CabacReader<C>>(seq: &[Seq], mut reader: CR, scheme: &str) {
+    {
+        let mut context = Vec::new();
+        for _ in 0..16 {
+            context.push(C::default());
+        }
 
-    let mut reader = read(writer.inner_buffer().to_vec());
-
-    for (i, s) in seq.iter().enumerate() {
-        match *s {
-            Seq::Normal(b, c) => {
-                assert_eq!(
-                    b,
-                    reader.get(&mut context[c]).unwrap(),
-                    "offset:{i} scheme:{scheme}"
-                );
-            }
-            Seq::Bypass(b) => {
-                assert_eq!(
-                    b,
-                    reader.get_bypass().unwrap(),
-                    "offset:{i} scheme:{scheme}"
-                );
+        for (i, s) in seq.iter().enumerate() {
+            match *s {
+                Seq::Normal(b, c) => {
+                    assert_eq!(
+                        b,
+                        reader.get(&mut context[c]).unwrap(),
+                        "offset:{i} scheme:{scheme}"
+                    );
+                }
+                Seq::Bypass(b) => {
+                    assert_eq!(
+                        b,
+                        reader.get_bypass().unwrap(),
+                        "offset:{i} scheme:{scheme}"
+                    );
+                }
             }
         }
     }
-
-    println!("scheme: {} len: {}", scheme, writer.inner_buffer().len());
 }
 
 fn test_seq_vp8(seq: &[Seq]) {
-    end_to_end(
-        seq,
-        || VP8Writer::new(Vec::new()).unwrap(),
-        |buf| VP8Reader::new(Cursor::new(buf)).unwrap(),
-        "vp8",
-    );
+    let mut vec = Vec::new();
+    do_write(seq, VP8Writer::new(&mut vec).unwrap());
+    do_read(seq, VP8Reader::new(Cursor::new(&vec)).unwrap(), "vp8");
 }
 
 fn test_seq_h265(seq: &[Seq]) {
-    end_to_end(
-        seq,
-        || H265Writer::new(Vec::new()),
-        |buf| H265Reader::new(Cursor::new(buf)).unwrap(),
-        "h265",
-    );
+    let mut vec = Vec::new();
+    do_write(seq, H265Writer::new(&mut vec));
+    do_read(seq, H265Reader::new(Cursor::new(&vec)).unwrap(), "h265");
 }
 
 fn test_seq_rans(seq: &[Seq]) {
-    end_to_end(
-        seq,
-        || RansWriter32::new(Vec::new()),
-        |buf| RansReader32::new(Cursor::new(buf)).unwrap(),
-        "rans32",
-    );
+    let mut vec = Vec::new();
+    do_write(seq, RansWriter32::new(&mut vec));
+    do_read(seq, RansReader32::new(Cursor::new(&vec)).unwrap(), "h265");
+}
+
+fn test_seq_fpaq(seq: &[Seq]) {
+    let mut vec = Vec::new();
+    do_write(seq, Fpaq0Encoder::new(&mut vec));
+    do_read(seq, Fpaq0Decoder::new(Cursor::new(&vec)).unwrap(), "h265");
 }
 
 fn test_all(seq: &[Seq]) {
     test_seq_vp8(seq);
     test_seq_h265(seq);
     test_seq_rans(seq);
-
-    end_to_end(
-        seq,
-        || Fpaq0Encoder::new(Vec::new()),
-        |buf| Fpaq0Decoder::new(Cursor::new(buf)).unwrap(),
-        "Fpaq",
-    );
+    test_seq_fpaq(seq);
 }
 
 #[test]

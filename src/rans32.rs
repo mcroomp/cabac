@@ -1,3 +1,6 @@
+///! Rans32 is a 32 bit rANS implementation. Speedwise it is similar to the arithmetic encoders despite
+/// having to reverse the symbols on encoding. The advantage of rANS is that it can be written
+/// into a buffer in parallel, which can be useful for multiplexing multiple streams into a single buffer.
 use std::{
     collections::VecDeque,
     io::{Read, Result, Write},
@@ -7,11 +10,11 @@ use std::{
 use bytemuck::cast_slice;
 
 use crate::{
-    traits::{CabacReader, CabacWriter, GetInnerBuffer},
+    traits::{CabacReader, CabacWriter},
     vp8::VP8Context,
 };
 
-pub trait WriteU16 {
+trait WriteU16 {
     fn write_u16(&mut self, value: u16);
 }
 
@@ -32,7 +35,7 @@ fn read_u16(r: &mut impl Read) -> Result<u16> {
 /// Rans32State is a 32 bit rANS state.
 /// The SCALE_BITS is the number of bits of resolution needed.
 #[derive(Clone, Copy)]
-pub struct Rans32State<const SCALE_BITS: u32>(u32);
+struct Rans32State<const SCALE_BITS: u32>(u32);
 
 impl<const SCALE_BITS: u32> std::fmt::Debug for Rans32State<SCALE_BITS> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,13 +47,13 @@ const RANS_WORD_L: u32 = 1 << 16; // Lower bound of our normalization interval
 
 impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
     #[inline]
-    pub fn new_encoder() -> Self {
+    fn new_encoder() -> Self {
         Rans32State(RANS_WORD_L)
     }
 
     /// Initializes a rANS decoder.
     #[inline]
-    pub fn new_decoder(source: &mut impl Read) -> Result<Self> {
+    fn new_decoder(source: &mut impl Read) -> Result<Self> {
         Ok(Rans32State(
             u32::from(read_u16(source)?) | (u32::from(read_u16(source)?) << 16),
         ))
@@ -58,7 +61,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
 
     /// Flushes the rANS encoder.
     #[inline]
-    pub fn enc_flush(&mut self, buffer: &mut impl WriteU16) {
+    fn enc_flush(&mut self, buffer: &mut impl WriteU16) {
         let x = self.0;
 
         buffer.write_u16((x >> 16) as u16);
@@ -67,18 +70,13 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
 
     // Returns the current cumulative frequency.
     #[inline]
-    pub fn dec_get(&self) -> u32 {
+    fn dec_get(&self) -> u32 {
         self.0 & ((1u32 << SCALE_BITS) - 1)
     }
 
     // Advances in the bit stream by "popping" a single symbol.
     #[inline]
-    pub fn dec_advance(
-        &mut self,
-        source: &mut impl Read,
-        start: u32,
-        freq: NonZeroU32,
-    ) -> Result<()> {
+    fn dec_advance(&mut self, source: &mut impl Read, start: u32, freq: NonZeroU32) -> Result<()> {
         let mask = (1u32 << SCALE_BITS) - 1;
 
         // s, x = D(x)
@@ -97,7 +95,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
 
     /// Encodes a single symbol
     #[inline]
-    pub fn encode(&mut self, output: &mut impl WriteU16, start: u32, freq: NonZeroU32) {
+    fn encode(&mut self, output: &mut impl WriteU16, start: u32, freq: NonZeroU32) {
         let mut x = self.0;
         let x_max = ((RANS_WORD_L >> SCALE_BITS) << 16) * u32::from(freq);
 
@@ -112,7 +110,7 @@ impl<const SCALE_BITS: u32> Rans32State<SCALE_BITS> {
 
     /// Encodes 2 symbols in parallel
     #[inline]
-    pub fn encode_2(
+    fn encode_2(
         output: &mut impl WriteU16,
         v: [(&mut Rans32State<SCALE_BITS>, u32, NonZeroU32); 2],
     ) {
@@ -162,12 +160,6 @@ pub struct RansWriter32<W> {
     upstream_writer: W,
     symbol_buffer: Box<[Symbol; STACK_SIZE]>,
     symbol_buffer_stack: usize,
-}
-
-impl GetInnerBuffer for RansWriter32<Vec<u8>> {
-    fn inner_buffer(&self) -> &[u8] {
-        &self.upstream_writer
-    }
 }
 
 impl<W: Write> RansWriter32<W> {

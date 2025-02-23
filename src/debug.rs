@@ -1,4 +1,4 @@
-/// this module contains a debug implementation of the cabac reader and writer. It is used to verify that the
+///! this module contains a debug implementation of the cabac reader and writer. It is used to verify that the
 /// correct context is always passed into the get and put functions. If the correct index is not passed, it
 /// can lead to very subtle consistency bugs, so it is worthwhile to test with the debug implementation.
 use std::io::{Read, Result, Write};

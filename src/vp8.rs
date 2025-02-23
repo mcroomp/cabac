@@ -1,3 +1,4 @@
+///! Codec based on the Google VP8 codec. It uses a 16 bit state for the probability of the next bit being 0.
 /*
  *  Copyright (c) 2010 The WebM project authors. All Rights Reserved.
  *
@@ -15,7 +16,6 @@ Redistributions in binary form must reproduce the above copyright notice, this l
 Neither the name of Google nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
-
 use std::{
     io::{Read, Result, Write},
     num::NonZeroU8,
@@ -23,7 +23,7 @@ use std::{
 
 use byteorder::WriteBytesExt;
 
-use crate::traits::{CabacReader, CabacWriter, GetInnerBuffer};
+use crate::traits::{CabacReader, CabacWriter};
 
 const BITS_IN_BYTE: i32 = 8;
 const BITS_IN_LONG: i32 = 64;
@@ -338,12 +338,6 @@ pub struct VP8Writer<W> {
     writer: W,
     num_buffered_bytes: u32,
     buffered_byte: u8,
-}
-
-impl GetInnerBuffer for VP8Writer<Vec<u8>> {
-    fn inner_buffer(&self) -> &[u8] {
-        &self.writer
-    }
 }
 
 impl<W: Write> VP8Writer<W> {

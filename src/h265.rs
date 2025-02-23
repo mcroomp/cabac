@@ -1,4 +1,5 @@
-/// implementation of CABAC from H.264/H.265 codec. Uses a 6 bit state to track probabilities.
+///! implementation of CABAC from H.264/H.265 codec. Uses a 6 bit state to track probabilities.
+///
 /*
  * H.265 video codec.
  * Copyright (c) 2013-2014 struktur AG, Dirk Farin <farin@struktur.de>
@@ -22,7 +23,7 @@ use std::io::{Read, Result, Write};
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
-use crate::traits::{CabacReader, CabacWriter, GetInnerBuffer};
+use crate::traits::{CabacReader, CabacWriter};
 
 const NEXT_STATE_MPS: [u8; 128] = [
     2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
@@ -233,12 +234,6 @@ impl<W: Write> CabacWriter<H265Context> for H265Writer<W> {
         }
 
         Ok(())
-    }
-}
-
-impl GetInnerBuffer for H265Writer<Vec<u8>> {
-    fn inner_buffer(&self) -> &[u8] {
-        &self.writer
     }
 }
 

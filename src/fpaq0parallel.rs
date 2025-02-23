@@ -1,7 +1,7 @@
 #[cfg(feature = "simd")]
 use wide::u32x4;
 
-/// Special version of FPaq0 that allows for parallel encoding and decoding. There is some overhead on the encoding
+///! Special version of FPaq0 that allows for parallel encoding and decoding. There is some overhead on the encoding
 /// side since we need to track the future output byte locations so that the reader can read them back without any
 /// special signalling.
 ///

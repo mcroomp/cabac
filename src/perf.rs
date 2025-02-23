@@ -1,3 +1,6 @@
+///! Performance tests for the various entropy coders. These are used for benmarking the performance of the
+/// encoders. These are not meant to be used as part of the library as a normal use case, but are useful for verifying that the
+/// library is working and performing correctly.
 use std::io::Cursor;
 
 #[cfg(feature = "simd")]
@@ -8,19 +11,17 @@ use crate::{
     fpaq0parallel::{EncoderOutput, Fpaq0DecoderParallel, Fpaq0EncoderParallel},
     h265::{H265Reader, H265Writer},
     rans32::{RansReader32, RansWriter32},
-    traits::{CabacReader, CabacWriter, GetInnerBuffer},
+    traits::{CabacReader, CabacWriter},
     vp8::{VP8Context, VP8Reader, VP8Writer},
 };
 
 #[inline(always)]
-fn generic_put_pattern<C: Default, CW: CabacWriter<C> + GetInnerBuffer, FW: FnOnce() -> CW>(
+fn generic_put_pattern<'a, C: Default, CW: CabacWriter<C>>(
     bypass: bool,
     pattern: &[bool],
-    f: FW,
-) -> Vec<u8> {
+    mut writer: CW,
+) {
     let mut context = [C::default(), C::default(), C::default(), C::default()];
-
-    let mut writer = f();
 
     if bypass {
         pattern.chunks_exact(4).for_each(|chunk| {
@@ -39,7 +40,6 @@ fn generic_put_pattern<C: Default, CW: CabacWriter<C> + GetInnerBuffer, FW: FnOn
     }
 
     writer.finish().unwrap();
-    writer.inner_buffer().to_vec()
 }
 
 #[inline(always)]
@@ -92,7 +92,11 @@ fn generic_test_pattern(get: fn(&[bool], &[u8]) -> Box<[bool]>, put: fn(&[bool])
 #[inline(never)]
 #[allow(dead_code)]
 pub fn rans32_put_pattern(pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(false, pattern, || RansWriter32::new(Vec::new()))
+    let mut output = Vec::new();
+
+    generic_put_pattern(false, pattern, RansWriter32::new(&mut output));
+
+    output
 }
 
 #[inline(never)]
@@ -106,7 +110,9 @@ pub fn rans32_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
 #[inline(never)]
 #[allow(dead_code)]
 pub fn rans32_put_pattern_bypass(pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(true, pattern, || RansWriter32::new(Vec::new()))
+    let mut output = Vec::new();
+    generic_put_pattern(true, pattern, RansWriter32::new(&mut output));
+    output
 }
 
 #[inline(never)]
@@ -126,7 +132,9 @@ fn rans32_test_pattern() {
 #[inline(never)]
 #[allow(dead_code)]
 pub fn vp8_put_pattern(pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(false, pattern, || VP8Writer::new(Vec::new()).unwrap())
+    let mut output = Vec::new();
+    generic_put_pattern(false, pattern, VP8Writer::new(&mut output).unwrap());
+    output
 }
 
 #[inline(never)]
@@ -140,7 +148,9 @@ pub fn vp8_get_pattern(pattern: &[bool], source: &[u8]) -> Box<[bool]> {
 #[inline(never)]
 #[allow(dead_code)]
 pub fn vp8_put_pattern_bypass(pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(true, pattern, || VP8Writer::new(Vec::new()).unwrap())
+    let mut output = Vec::new();
+    generic_put_pattern(true, pattern, VP8Writer::new(&mut output).unwrap());
+    output
 }
 
 #[inline(never)]
@@ -160,13 +170,17 @@ fn vp8_test_pattern() {
 #[inline(never)]
 #[allow(dead_code)]
 pub fn h265_put_pattern(pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(false, pattern, || H265Writer::new(Vec::new()))
+    let mut output = Vec::new();
+    generic_put_pattern(false, pattern, H265Writer::new(&mut output));
+    output
 }
 
 #[inline(never)]
 #[allow(dead_code)]
 pub fn h265_put_pattern_bypass(pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(true, pattern, || H265Writer::new(Vec::new()))
+    let mut output = Vec::new();
+    generic_put_pattern(true, pattern, H265Writer::new(&mut output));
+    output
 }
 
 #[inline(never)]
@@ -194,7 +208,9 @@ fn h264_test_pattern() {
 #[inline(never)]
 #[allow(dead_code)]
 pub fn fpaq_put_pattern(pattern: &[bool]) -> Vec<u8> {
-    generic_put_pattern(false, pattern, || Fpaq0Encoder::new(Vec::new()))
+    let mut output = Vec::new();
+    generic_put_pattern(false, pattern, Fpaq0Encoder::new(&mut output));
+    output
 }
 
 #[inline(never)]
