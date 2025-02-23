@@ -31,6 +31,7 @@ const BITS_IN_LONG_MINUS_LAST_BYTE: i32 = BITS_IN_LONG - BITS_IN_BYTE;
 
 /// context for VP8 encoder/decoder. Consists of two 8 bit counts (lower byte for true, top byte for false).
 /// the probability of the next symbol being zero is false_count / (false_count + true_count)
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct VP8Context {
     counts: u16,
 }

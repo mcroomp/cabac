@@ -114,7 +114,7 @@ const RENORM_TABLE: [u8; 32] = [
 ];
 
 /// context that tracks the probability of the next most probable symbol (either 1 or 0). Uses 6 bits.
-#[derive(Default)]
+#[derive(Default, Copy, Clone, Eq, PartialEq)]
 pub struct H265Context {
     uc_state: u8,
 }
