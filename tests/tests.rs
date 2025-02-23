@@ -1,10 +1,10 @@
 use std::io::Cursor;
 
+use cabac::fpaq0::{Fpaq0Decoder, Fpaq0Encoder};
+use cabac::h265::{H265Reader, H265Writer};
+use cabac::rans32::{RansReader32, RansWriter32};
+use cabac::vp8::{VP8Reader, VP8Writer};
 use cabac::{CabacReader, CabacWriter};
-use cabac::{Fpaq0Decoder, Fpaq0Encoder};
-use cabac::{H265Reader, H265Writer};
-use cabac::{RansReader32, RansWriter32};
-use cabac::{VP8Reader, VP8Writer};
 
 #[derive(Clone, Copy)]
 enum Seq {

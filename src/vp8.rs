@@ -1,4 +1,6 @@
-///! Codec based on the Google VP8 codec. It uses a 16 bit state for the probability of the next bit being 0.
+//! Based on the Google VP8 codec as used by the JPEG Lepton compressor.
+//!
+//! It uses a 16 bit state for the probability of the next bit being 0.
 /*
  *  Copyright (c) 2010 The WebM project authors. All Rights Reserved.
  *

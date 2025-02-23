@@ -1,6 +1,8 @@
-///! Rans32 is a 32 bit rANS implementation. Speedwise it is similar to the arithmetic encoders despite
-/// having to reverse the symbols on encoding. The advantage of rANS is that it can be written
-/// into a buffer in parallel, which can be useful for multiplexing multiple streams into a single buffer.
+//! 32 bit rANS implementation.
+//!
+//! Speedwise it is similar to the arithmetic encoders despite
+//! having to reverse the symbols on encoding. The advantage of rANS is that it can be written
+//! into a buffer in parallel, which can be useful for multiplexing multiple streams into a single buffer.
 use std::{
     collections::VecDeque,
     io::{Read, Result, Write},

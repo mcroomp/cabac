@@ -1,6 +1,8 @@
-///! Performance tests for the various entropy coders. These are used for benmarking the performance of the
-/// encoders. These are not meant to be used as part of the library as a normal use case, but are useful for verifying that the
-/// library is working and performing correctly.
+//! Internal performance tests for the various entropy coders.
+//!
+//! These are used for benmarking the performance of the encoders. These are not meant to be used
+//!  as part of the library as a normal use case, but are useful for verifying that the
+//! library is working and performing correctly.
 use std::io::Cursor;
 
 #[cfg(feature = "simd")]

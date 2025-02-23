@@ -1,6 +1,8 @@
-///! this module contains a debug implementation of the cabac reader and writer. It is used to verify that the
-/// correct context is always passed into the get and put functions. If the correct index is not passed, it
-/// can lead to very subtle consistency bugs, so it is worthwhile to test with the debug implementation.
+//! Debug implementation of the cabac reader and writer.
+//!
+//! It is used to verify that the
+//! correct context is always passed into the get and put functions. If the correct index is not passed, it
+//! can lead to very subtle consistency bugs, so it is worthwhile to test with the debug implementation.
 use std::io::{Read, Result, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -20,6 +22,7 @@ impl Default for DebugContext {
     }
 }
 
+/// Decoder for debugging purposes only. It will check that the correct context is passed in the same order.
 pub struct DebugReader<R> {
     reader: R,
     counter: u32,
@@ -57,7 +60,7 @@ impl<R: Read> CabacReader<DebugContext> for DebugReader<R> {
     }
 }
 
-/// encoder from VP8/WebM
+/// Encoder for debugging purposes only.
 pub struct DebugWriter<W> {
     writer: W,
     counter: u32,

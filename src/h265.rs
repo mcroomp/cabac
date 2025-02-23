@@ -1,5 +1,4 @@
-///! implementation of CABAC from H.264/H.265 codec. Uses a 6 bit state to track probabilities.
-///
+//! H.264/H.265 binary encoder. Uses a 6 bit state to track probabilities.
 /*
  * H.265 video codec.
  * Copyright (c) 2013-2014 struktur AG, Dirk Farin <farin@struktur.de>
