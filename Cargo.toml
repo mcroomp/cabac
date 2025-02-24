@@ -1,6 +1,6 @@
 [package]
 name = "cabac"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
 
 description = "Context-adaptive binary arithmetic coding library"
@@ -33,5 +33,5 @@ harness = false
 
 [features]
 # simd is still slower than non-simd... work in progress
-default = []
+default = ["simd"]
 simd = ["dep:wide"]

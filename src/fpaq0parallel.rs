@@ -35,6 +35,288 @@ use std::{
     io::{Read, Result, Write},
 };
 
+/// This holds the output and stitches together the future output in the right
+/// order so that the reader can read it back without any special signalling.
+///
+/// This is implementation doesn't work well  if the encoders are not very well balanced
+/// since it does a linear search to find the right location to write the byte.
+///
+/// However, in balanced cases this is faster than the bookkeeping required to avoid the
+/// linear search.
+pub struct ParallelEncoderOutput<W> {
+    /// the next id of the encoder that is attached to this output. Each encoder
+    /// gets a unique id so that we can keep track of the future output of that encoder.
+    next_id: u8,
+
+    /// the future output that cannot yet be written because the next byte hasn't been
+    /// decided on.
+    future_output: VecDeque<u16>,
+
+    /// the writer that we flush to once we have decided on the next byte
+    output: W,
+}
+
+impl<W: Write> ParallelEncoderOutput<W> {
+    pub fn new(output: W) -> Self {
+        ParallelEncoderOutput {
+            next_id: 0,
+            future_output: VecDeque::new(),
+            output,
+        }
+    }
+
+    /// writes a byte to the steam in its reserved location. If repush is true, it will
+    /// reserve a new location for the next byte.
+    ///
+    /// Don't inline this because otherwise the compiler will not be able to use
+    /// as many registers in the hot loop.
+    #[cold]
+    fn flush_byte<const REPUSH: bool>(&mut self, byte: u8, id: u8) -> Result<()> {
+        let slices = self.future_output.as_mut_slices();
+        assert!(!slices.0.is_empty());
+
+        let mut first_iter = slices.0.iter_mut();
+
+        if *first_iter.next().unwrap() == id as u16 {
+            // if the first item is the one we are looking for, then we can write it
+            // together along with the rest of the output that has been decided.
+            let _ = self.future_output.pop_front().unwrap();
+            if REPUSH {
+                self.future_output.push_back(id as u16);
+            }
+
+            self.output.write_all(&[byte])?;
+
+            while let Some(&x) = self.future_output.front() {
+                if (x & 0x100) == 0 {
+                    break;
+                }
+                let _ = self.future_output.pop_front();
+
+                self.output.write_all(&[x as u8])?;
+            }
+        } else {
+            // otherwise we need to find a location to write the byte in the future
+            // and then push a new location at the end of the stack
+
+            while let Some(v) = first_iter.next() {
+                if *v == id as u16 {
+                    *v = byte as u16 | 0x100;
+                    if REPUSH {
+                        self.future_output.push_back(id as u16);
+                    }
+                    return Ok(());
+                }
+            }
+
+            for v in slices.1 {
+                if *v == id as u16 {
+                    *v = byte as u16 | 0x100;
+
+                    if REPUSH {
+                        self.future_output.push_back(id as u16);
+                    }
+                    return Ok(());
+                }
+            }
+
+            panic!("id not found in future output");
+        }
+
+        Ok(())
+    }
+
+    /// writes a byte to the output stream in such a position that it can be
+    /// read back by the decoder without any special signalling as long
+    /// as it is done in the same order as it was written
+    pub fn write_bypass_byte(&mut self, byte: u8) -> Result<()> {
+        if self.future_output.is_empty() {
+            self.output.write_all(&[byte])?;
+        } else {
+            self.future_output.push_back(byte as u16 | 0x100);
+        }
+
+        Ok(())
+    }
+}
+
+/// This encoder writes whole bits and can be used to write bits to the stream where probability doesn't help.
+pub struct BypassBitEncoder {
+    id: u8,
+    b: u8,
+    bits_written: usize,
+}
+
+impl BypassBitEncoder {
+    pub fn new<W: Write>(output: &mut ParallelEncoderOutput<W>) -> Self {
+        assert!(output.next_id < 255, "too many encoders on the same output");
+        let id = output.next_id;
+        output.next_id += 1;
+
+        output.future_output.push_back(id as u16);
+
+        BypassBitEncoder {
+            id,
+            b: 0,
+            bits_written: 0,
+        }
+    }
+
+    /// writes a bit to the stream
+    pub fn put<W: Write>(
+        &mut self,
+        bit: bool,
+        writer: &mut ParallelEncoderOutput<W>,
+    ) -> Result<()> {
+        if self.bits_written == 8 {
+            writer.flush_byte::<true>(self.b, self.id)?;
+            self.b = 0;
+            self.bits_written = 0;
+        }
+
+        self.b |= (bit as u8) << self.bits_written;
+        self.bits_written += 1;
+
+        Ok(())
+    }
+
+    /// flushes any remaining bits
+    pub fn finish<W: Write>(&mut self, writer: &mut ParallelEncoderOutput<W>) -> Result<()> {
+        writer.flush_byte::<false>(self.b, self.id)?;
+
+        Ok(())
+    }
+}
+
+/// counterpart to BypassBitEncoder that reads the bits back
+pub struct BypassBitDecoder {
+    b: u8,
+    bits_left: usize,
+}
+
+impl BypassBitDecoder {
+    pub fn new(reader: &mut impl Read) -> Result<Self> {
+        let mut buf = [0u8];
+        reader.read_exact(&mut buf)?;
+
+        Ok(BypassBitDecoder {
+            b: buf[0],
+            bits_left: 8,
+        })
+    }
+
+    /// reads a bit from the stream
+    pub fn get<R: Read>(&mut self, reader: &mut R) -> Result<bool> {
+        if self.bits_left == 0 {
+            let mut buf = [0u8];
+            reader.read_exact(&mut buf)?;
+            self.b = buf[0];
+            self.bits_left = 8;
+        }
+
+        let bit = (self.b & 1) != 0;
+        self.b >>= 1;
+        self.bits_left -= 1;
+
+        Ok(bit)
+    }
+}
+
+/// Encodes a bitstream using a context aware binary arithmetic encoder. Multiple encoders can be used
+/// on the same bitstream and the bits will be interleaved in such a way that they can be read back
+/// without any special signalling.
+pub struct Fpaq0EncoderParallel {
+    xl: u32,
+    xr: u32,
+    id: u8,
+}
+
+impl std::fmt::Debug for Fpaq0EncoderParallel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Fpaq0Encoder {{ xl: {:x}, xr: {:x} }}", self.xl, self.xr)
+    }
+}
+
+impl Fpaq0EncoderParallel {
+    /// creates new encoder and attaches it to the output stream
+    pub fn new<W: Write>(output: &mut ParallelEncoderOutput<W>) -> Self {
+        // we flush 4 bytes at the beginning to make sure that we can read the first four bytes when the
+        // encoder starts
+        assert!(output.next_id < 255, "too many encoders on the same output");
+        let id = output.next_id;
+        output.next_id += 1;
+
+        for _i in 0..4 {
+            output.future_output.push_back(id as u16);
+        }
+
+        Fpaq0EncoderParallel {
+            xl: 0,
+            xr: 0xffff_ffff,
+            id,
+        }
+    }
+
+    fn flush_bits<W: Write>(
+        &mut self,
+        writer: &mut ParallelEncoderOutput<W>,
+        xl: &mut u32,
+        xr: &mut u32,
+    ) -> Result<()> {
+        while 0 == ((*xl ^ *xr) & 0xFF00_0000) {
+            let byte = (*xr >> 24) as u8;
+
+            writer.flush_byte::<true>(byte, self.id)?;
+
+            *xl <<= 8;
+            *xr = (*xr << 8) | 0x0000_00FF;
+        }
+        Ok(())
+    }
+
+    /// puts bit into the stream given a certain probability context
+    pub fn put<W: Write>(
+        &mut self,
+        bit: bool,
+        branch: &mut VP8Context,
+        writer: &mut ParallelEncoderOutput<W>,
+    ) -> Result<()> {
+        let mut xl = self.xl;
+        let mut xr = self.xr;
+
+        let xm = xl + ((xr - xl) >> 8) * u32::from(branch.get_probability().get());
+
+        // left/lower part of the interval corresponds to zero
+
+        if !bit {
+            xr = xm;
+        } else {
+            xl = xm + 1;
+        }
+
+        let b = branch.record_and_update_bit(bit);
+
+        self.flush_bits(writer, &mut xl, &mut xr)?;
+
+        *branch = b;
+        self.xl = xl;
+        self.xr = xr;
+        Ok(())
+    }
+
+    /// flushes any outstanding bits into the stream
+    pub fn finish<W: Write>(&mut self, writer: &mut ParallelEncoderOutput<W>) -> Result<()> {
+        let mut byte = (self.xr >> 24) as u8;
+
+        for _ in 0..4 {
+            writer.flush_byte::<false>(byte, self.id)?;
+            byte = 0;
+        }
+
+        Ok(())
+    }
+}
+
 /// Decodes a byte stream encoded by Fpaq0EncoderParallel
 pub struct Fpaq0DecoderParallel {
     xl: u32,
@@ -226,196 +508,17 @@ impl Fpaq0DecoderParallelSimd {
     }
 }
 
-/// This holds the output and stitches together the future output in the right
-/// order so that the reader can read it back without any special signalling.
-///
-/// This is implementation is not idea if the encoders are not very well balanced
-/// since it does a linear search to find the right location to write the byte.
-///
-/// However, in balanced cases this is faster than the bookkeeping required to avoid the
-/// linear search.
-pub struct EncoderOutput<W> {
-    future_output: VecDeque<u16>,
-    output: W,
-}
-
-impl<W: Write> EncoderOutput<W> {
-    pub fn new(output: W) -> Self {
-        EncoderOutput {
-            future_output: VecDeque::new(),
-            output,
-        }
-    }
-
-    /// writes a byte to the steam in its reserved location. If repush is true, it will
-    /// reserve a new location for the next byte.
-    ///
-    /// Don't inline this because otherwise the compiler will not be able to use
-    /// as many registers in the hot loop.
-    #[cold]
-    fn flush_byte<const REPUSH: bool>(&mut self, byte: u8, id: u8) -> Result<()> {
-        let slices = self.future_output.as_mut_slices();
-        assert!(!slices.0.is_empty());
-
-        let mut first_iter = slices.0.iter_mut();
-
-        if *first_iter.next().unwrap() == id as u16 {
-            // if the first item is the one we are looking for, then we can write it
-            // together along with the rest of the output that has been decided.
-            let _ = self.future_output.pop_front().unwrap();
-            if REPUSH {
-                self.future_output.push_back(id as u16);
-            }
-
-            self.output.write_all(&[byte])?;
-
-            while let Some(&x) = self.future_output.front() {
-                if (x & 0x100) == 0 {
-                    break;
-                }
-                let _ = self.future_output.pop_front();
-
-                self.output.write_all(&[x as u8])?;
-            }
-        } else {
-            // otherwise we need to find a location to write the byte in the future
-            // and then push a new location at the end of the stack
-
-            while let Some(v) = first_iter.next() {
-                if *v == id as u16 {
-                    *v = byte as u16 | 0x100;
-                    if REPUSH {
-                        self.future_output.push_back(id as u16);
-                    }
-                    return Ok(());
-                }
-            }
-
-            for v in slices.1 {
-                if *v == id as u16 {
-                    *v = byte as u16 | 0x100;
-
-                    if REPUSH {
-                        self.future_output.push_back(id as u16);
-                    }
-                    return Ok(());
-                }
-            }
-
-            panic!("id not found in future output");
-        }
-
-        Ok(())
-    }
-
-    /// writes a byte to the output stream in such a position that it can be
-    /// read back by the decoder without any special signalling as long
-    /// as it is done in the same order as it was written
-    pub fn write_bypass_byte(&mut self, byte: u8) -> Result<()> {
-        if self.future_output.is_empty() {
-            self.output.write_all(&[byte])?;
-        } else {
-            self.future_output.push_back(byte as u16 | 0x100);
-        }
-
-        Ok(())
-    }
-}
-
-pub struct Fpaq0EncoderParallel {
-    xl: u32,
-    xr: u32,
-    id: u8,
-}
-
-impl std::fmt::Debug for Fpaq0EncoderParallel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Fpaq0Encoder {{ xl: {:x}, xr: {:x} }}", self.xl, self.xr)
-    }
-}
-
-impl Fpaq0EncoderParallel {
-    pub fn new<W: Write>(output: &mut EncoderOutput<W>, id: u8) -> Self {
-        for _i in 0..4 {
-            output.future_output.push_back(id as u16);
-        }
-
-        Fpaq0EncoderParallel {
-            xl: 0,
-            xr: 0xffff_ffff,
-            id,
-        }
-    }
-
-    fn flush_bits<W: Write>(
-        &mut self,
-        writer: &mut EncoderOutput<W>,
-        xl: &mut u32,
-        xr: &mut u32,
-    ) -> Result<()> {
-        while 0 == ((*xl ^ *xr) & 0xFF00_0000) {
-            let byte = (*xr >> 24) as u8;
-
-            writer.flush_byte::<true>(byte, self.id)?;
-
-            *xl <<= 8;
-            *xr = (*xr << 8) | 0x0000_00FF;
-        }
-        Ok(())
-    }
-
-    pub fn put<W: Write>(
-        &mut self,
-        bit: bool,
-        branch: &mut VP8Context,
-        writer: &mut EncoderOutput<W>,
-    ) -> Result<()> {
-        let mut xl = self.xl;
-        let mut xr = self.xr;
-
-        let xm = xl + ((xr - xl) >> 8) * u32::from(branch.get_probability().get());
-
-        // left/lower part of the interval corresponds to zero
-
-        if !bit {
-            xr = xm;
-        } else {
-            xl = xm + 1;
-        }
-
-        let b = branch.record_and_update_bit(bit);
-
-        self.flush_bits(writer, &mut xl, &mut xr)?;
-
-        *branch = b;
-        self.xl = xl;
-        self.xr = xr;
-        Ok(())
-    }
-
-    pub fn finish<W: Write>(&mut self, writer: &mut EncoderOutput<W>) -> Result<()> {
-        let mut byte = (self.xr >> 24) as u8;
-
-        for _ in 0..4 {
-            writer.flush_byte::<false>(byte, self.id)?;
-            byte = 0;
-        }
-
-        Ok(())
-    }
-}
-
 #[test]
 fn bypass_byte() {
     use byteorder::ReadBytesExt;
 
     let mut outputbuffer = Vec::new();
-    let mut output = EncoderOutput::new(&mut outputbuffer);
+    let mut output = ParallelEncoderOutput::new(&mut outputbuffer);
 
     {
         let mut context = VP8Context::default();
 
-        let mut encoder = Fpaq0EncoderParallel::new(&mut output, 0);
+        let mut encoder = Fpaq0EncoderParallel::new(&mut output);
         for i in 0i32..1024 {
             if i > 10 && i < 20 {
                 output.write_bypass_byte(i as u8).unwrap();
@@ -447,19 +550,40 @@ fn bypass_byte() {
 }
 
 #[test]
+fn bypass_encoder() {
+    let mut outputbuffer = Vec::new();
+    let mut output = ParallelEncoderOutput::new(&mut outputbuffer);
+
+    let mut encoder = BypassBitEncoder::new(&mut output);
+
+    for i in 0..999 {
+        encoder.put(i % 3 == 0, &mut output).unwrap();
+    }
+
+    encoder.finish(&mut output).unwrap();
+
+    let mut reader = std::io::Cursor::new(&outputbuffer);
+
+    let mut decoder = BypassBitDecoder::new(&mut reader).unwrap();
+
+    for i in 0..999 {
+        assert_eq!(decoder.get(&mut reader).unwrap(), i % 3 == 0);
+    }
+}
+
+#[test]
 fn bypass_dual() {
-    let mut output = EncoderOutput {
-        future_output: VecDeque::new(),
-        output: Vec::new(),
-    };
+    let mut output = ParallelEncoderOutput::new(Vec::new());
     {
         let mut context1 = VP8Context::default();
         let mut context2 = VP8Context::default();
         let mut context3 = VP8Context::default();
 
-        let mut encoder1 = Fpaq0EncoderParallel::new(&mut output, 0);
-        let mut encoder2 = Fpaq0EncoderParallel::new(&mut output, 1);
-        let mut encoder3 = Fpaq0EncoderParallel::new(&mut output, 2);
+        let mut encoder1 = Fpaq0EncoderParallel::new(&mut output);
+        let mut encoder2 = Fpaq0EncoderParallel::new(&mut output);
+        let mut encoder3 = Fpaq0EncoderParallel::new(&mut output);
+        let mut encoder4 = BypassBitEncoder::new(&mut output);
+
         for i in 0i32..1024 {
             encoder1
                 .put((i % 47) != 0, &mut context1, &mut output)
@@ -470,11 +594,13 @@ fn bypass_dual() {
             encoder3
                 .put(i % 5 != 0, &mut context3, &mut output)
                 .unwrap();
+            encoder4.put(i % 7 != 0, &mut output).unwrap();
         }
 
         encoder1.finish(&mut output).unwrap();
         encoder2.finish(&mut output).unwrap();
         encoder3.finish(&mut output).unwrap();
+        encoder4.finish(&mut output).unwrap();
 
         // nothing should be left to write
         assert!(output.future_output.is_empty());
@@ -490,6 +616,8 @@ fn bypass_dual() {
         let mut decoder1 = Fpaq0DecoderParallel::new(&mut reader).unwrap();
         let mut decoder2 = Fpaq0DecoderParallel::new(&mut reader).unwrap();
         let mut decoder3 = Fpaq0DecoderParallel::new(&mut reader).unwrap();
+        let mut decoder4 = BypassBitDecoder::new(&mut reader).unwrap();
+
         for i in 0..1024 {
             assert_eq!(
                 decoder1.get(&mut context1, &mut reader).unwrap(),
@@ -503,6 +631,7 @@ fn bypass_dual() {
                 decoder3.get(&mut context3, &mut reader).unwrap(),
                 (i % 5) != 0
             );
+            assert_eq!(decoder4.get(&mut reader).unwrap(), (i % 7) != 0, "i:{}", i);
         }
     }
 }
@@ -510,10 +639,7 @@ fn bypass_dual() {
 #[cfg(feature = "simd")]
 #[test]
 fn simd_test() {
-    let mut output = EncoderOutput {
-        future_output: VecDeque::new(),
-        output: Vec::new(),
-    };
+    let mut output = ParallelEncoderOutput::new(Vec::new());
     {
         let mut context = [
             VP8Context::default(),
@@ -522,10 +648,10 @@ fn simd_test() {
             VP8Context::default(),
         ];
         let mut encoders = [
-            Fpaq0EncoderParallel::new(&mut output, 0),
-            Fpaq0EncoderParallel::new(&mut output, 1),
-            Fpaq0EncoderParallel::new(&mut output, 2),
-            Fpaq0EncoderParallel::new(&mut output, 3),
+            Fpaq0EncoderParallel::new(&mut output),
+            Fpaq0EncoderParallel::new(&mut output),
+            Fpaq0EncoderParallel::new(&mut output),
+            Fpaq0EncoderParallel::new(&mut output),
         ];
 
         for i in 0i32..10240 {

@@ -10,7 +10,7 @@ use crate::fpaq0parallel::Fpaq0DecoderParallelSimd;
 
 use crate::{
     fpaq0::{Fpaq0Decoder, Fpaq0Encoder},
-    fpaq0parallel::{EncoderOutput, Fpaq0DecoderParallel, Fpaq0EncoderParallel},
+    fpaq0parallel::{Fpaq0DecoderParallel, Fpaq0EncoderParallel, ParallelEncoderOutput},
     h265::{H265Reader, H265Writer},
     rans32::{RansReader32, RansWriter32},
     traits::{CabacReader, CabacWriter},
@@ -240,13 +240,13 @@ pub fn fpaq_parallel_put_pattern(pattern: &[bool]) -> Vec<u8> {
         ];
 
         let mut outputbuffer = Vec::new();
-        let mut output = EncoderOutput::new(&mut outputbuffer);
+        let mut output = ParallelEncoderOutput::new(&mut outputbuffer);
 
         let mut writer = [
-            Fpaq0EncoderParallel::new(&mut output, 0),
-            Fpaq0EncoderParallel::new(&mut output, 1),
-            Fpaq0EncoderParallel::new(&mut output, 2),
-            Fpaq0EncoderParallel::new(&mut output, 3),
+            Fpaq0EncoderParallel::new(&mut output),
+            Fpaq0EncoderParallel::new(&mut output),
+            Fpaq0EncoderParallel::new(&mut output),
+            Fpaq0EncoderParallel::new(&mut output),
         ];
 
         for p in 0..pattern.len() / 4 {

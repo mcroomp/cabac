@@ -1,9 +1,13 @@
 use std::io::Cursor;
 
 use cabac::fpaq0::{Fpaq0Decoder, Fpaq0Encoder};
+use cabac::fpaq0parallel::{
+    BypassBitDecoder, BypassBitEncoder, Fpaq0DecoderParallel, Fpaq0EncoderParallel,
+    ParallelEncoderOutput,
+};
 use cabac::h265::{H265Reader, H265Writer};
 use cabac::rans32::{RansReader32, RansWriter32};
-use cabac::vp8::{VP8Reader, VP8Writer};
+use cabac::vp8::{VP8Context, VP8Reader, VP8Writer};
 use cabac::{CabacReader, CabacWriter};
 
 #[derive(Clone, Copy)]
@@ -71,13 +75,77 @@ fn test_seq_h265(seq: &[Seq]) {
 fn test_seq_rans(seq: &[Seq]) {
     let mut vec = Vec::new();
     do_write(seq, RansWriter32::new(&mut vec));
-    do_read(seq, RansReader32::new(Cursor::new(&vec)).unwrap(), "h265");
+    do_read(seq, RansReader32::new(Cursor::new(&vec)).unwrap(), "rans");
 }
 
 fn test_seq_fpaq(seq: &[Seq]) {
     let mut vec = Vec::new();
     do_write(seq, Fpaq0Encoder::new(&mut vec));
-    do_read(seq, Fpaq0Decoder::new(Cursor::new(&vec)).unwrap(), "h265");
+    do_read(seq, Fpaq0Decoder::new(Cursor::new(&vec)).unwrap(), "fpaq");
+}
+
+/// FPAQ parallel encoder/decoder
+fn test_seq_fpaq_parallel(seq: &[Seq]) {
+    let mut vec = Vec::new();
+
+    {
+        let mut encoder_output = ParallelEncoderOutput::new(&mut vec);
+
+        let mut context = Vec::new();
+        let mut writers: Vec<Fpaq0EncoderParallel> = Vec::new();
+        for _i in 0..16 {
+            context.push(VP8Context::default());
+            writers.push(Fpaq0EncoderParallel::new(&mut encoder_output));
+        }
+
+        let mut bypassencoder = BypassBitEncoder::new(&mut encoder_output);
+
+        for (i, &s) in seq.iter().enumerate() {
+            match s {
+                Seq::Normal(b, c) => writers[i % 16]
+                    .put(b, &mut context[c], &mut encoder_output)
+                    .unwrap(),
+                Seq::Bypass(b) => bypassencoder.put(b, &mut encoder_output).unwrap(),
+            }
+        }
+
+        for writer in writers.iter_mut() {
+            writer.finish(&mut encoder_output).unwrap();
+        }
+        bypassencoder.finish(&mut encoder_output).unwrap();
+    }
+
+    let mut bytestreamreader = Cursor::new(&vec);
+
+    let mut context = Vec::new();
+    let mut readers = Vec::new();
+    for _i in 0..16 {
+        context.push(VP8Context::default());
+        readers.push(Fpaq0DecoderParallel::new(&mut bytestreamreader).unwrap());
+    }
+
+    let mut bypassdecoder = BypassBitDecoder::new(&mut bytestreamreader).unwrap();
+
+    for (i, s) in seq.iter().enumerate() {
+        match *s {
+            Seq::Normal(b, c) => {
+                assert_eq!(
+                    b,
+                    readers[i % 16]
+                        .get(&mut context[c], &mut bytestreamreader)
+                        .unwrap(),
+                    "offset:{i} scheme:FpaqParallel"
+                );
+            }
+            Seq::Bypass(b) => {
+                assert_eq!(
+                    b,
+                    bypassdecoder.get(&mut bytestreamreader).unwrap(),
+                    "offset:{i} scheme:FpaqParallel"
+                );
+            }
+        }
+    }
 }
 
 fn test_all(seq: &[Seq]) {
@@ -85,6 +153,7 @@ fn test_all(seq: &[Seq]) {
     test_seq_h265(seq);
     test_seq_rans(seq);
     test_seq_fpaq(seq);
+    test_seq_fpaq_parallel(seq);
 }
 
 #[test]
